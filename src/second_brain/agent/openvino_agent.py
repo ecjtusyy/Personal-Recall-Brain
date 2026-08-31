@@ -91,6 +91,7 @@ search_memory 参数：query,start_date,end_date,file_type。
 get_timeline 参数：start_date,end_date,topic。
 当前学习年份：{self.config.study_year}
 问题：{question}
+不要展开思考，只做工具选择。/no_think
 JSON："""
         try:
             candidate = _json_object(self.model.generate(prompt, 180))
@@ -159,9 +160,10 @@ JSON："""
 先直接回答，再按时间列出关键证据，最后列出来源。证据不足要明确说不足。使用中文。
 用户问题：{question}
 证据 JSON：{json.dumps(compact, ensure_ascii=False)}
+不要展示思考过程，只输出简洁答案。/no_think
 回答："""
         try:
-            generated = self.model.generate(prompt)
+            generated = self.model.generate(prompt, min(self.config.models.max_new_tokens, 384))
             if generated and self._grounded(generated, evidence):
                 return AgentAnswer(generated, evidence, plan, "openvino")
         except Exception:

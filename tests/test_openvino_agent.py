@@ -26,8 +26,10 @@ class FakeModel:
         self.responses = list(responses)
         self.available = available
         self.unloaded = False
+        self.prompts = []
 
     def generate(self, prompt, max_new_tokens=None):
+        self.prompts.append(prompt)
         return self.responses.pop(0)
 
     def unload(self):
@@ -52,6 +54,7 @@ def test_agent_plans_tool_and_synthesizes_grounded_answer(tmp_path):
     assert answer.mode == "openvino"
     assert answer.plan["tool"] == "search_memory"
     assert tools.calls[0][1] == "申论"
+    assert all("/no_think" in prompt for prompt in model.prompts)
 
 
 def test_hallucinated_date_forces_deterministic_fallback(tmp_path):
@@ -77,4 +80,3 @@ def test_close_unloads_model(tmp_path):
     agent = RecallAgent(config(tmp_path), FakeTools(), model)
     agent.close()
     assert model.unloaded
-

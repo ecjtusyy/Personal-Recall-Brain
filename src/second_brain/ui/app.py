@@ -25,6 +25,12 @@ def runtime(config_path: str):
     return config, conn
 
 
+@st.cache_resource
+def agent_runtime(config_path: str):
+    agent_config, agent_conn = runtime(config_path)
+    return RecallAgent(agent_config, MemoryTools(agent_config, agent_conn))
+
+
 CONFIG_PATH = os.environ.get("SECOND_BRAIN_CONFIG", "config.toml")
 config, conn = runtime(str(Path(CONFIG_PATH).resolve()))
 tools = MemoryTools(config, conn)
@@ -119,11 +125,7 @@ with chat_tab:
             st.write(question)
         with st.chat_message("assistant"):
             with st.spinner("正在检索本地证据…"):
-                agent = RecallAgent(config, tools)
-                try:
-                    result = agent.answer(question)
-                finally:
-                    agent.close()
+                result = agent_runtime(str(Path(CONFIG_PATH).resolve())).answer(question)
             st.markdown(result.answer)
             st.caption("回答模式：OpenVINO 本地 Agent" if result.mode == "openvino" else "回答模式：确定性检索（模型未加载或回答校验未通过）")
             show_evidence(result.evidence, f"answer-{len(st.session_state.messages)}")

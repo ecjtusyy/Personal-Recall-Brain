@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 from .agent.openvino_agent import RecallAgent
@@ -59,6 +60,8 @@ def cmd_ask(args) -> int:
     finally:
         agent.close()
     print(result.answer)
+    label = "OpenVINO 本地 Agent" if result.mode == "openvino" else "确定性证据检索"
+    print(f"回答模式：{label}", file=sys.stderr)
     return 0
 
 
