@@ -11,6 +11,24 @@ from huggingface_hub import snapshot_download
 from .config import load_config
 
 
+LFM_OPENVINO_FILES = (
+    "LICENSE",
+    "NOTICE",
+    "chat_template.jinja",
+    "config.json",
+    "generation_config.json",
+    "openvino_config.json",
+    "openvino_detokenizer.bin",
+    "openvino_detokenizer.xml",
+    "openvino_model.bin",
+    "openvino_model.xml",
+    "openvino_tokenizer.bin",
+    "openvino_tokenizer.xml",
+    "tokenizer.json",
+    "tokenizer_config.json",
+)
+
+
 def profile_models(config, profile: str) -> list[str]:
     mapping = {
         "core": [config.models.agent_id],
@@ -62,12 +80,28 @@ def _export_lfm_agent(config, runner=None, optimum_cli: Path | None = None) -> P
     return target
 
 
+def _prepare_lfm_agent(config) -> Path:
+    target = config.agent_model_path
+    if (target / "openvino_model.xml").exists():
+        return target
+    if config.models.agent_openvino_id:
+        snapshot_download(
+            repo_id=config.models.agent_openvino_id,
+            local_dir=target,
+            allow_patterns=LFM_OPENVINO_FILES,
+        )
+        if not (target / "openvino_model.xml").exists():
+            raise RuntimeError("下载结束但未找到 LFM OpenVINO IR")
+        return target
+    return _export_lfm_agent(config)
+
+
 def download_models(config_path: str | Path, profile: str = "core") -> list[Path]:
     config = load_config(config_path)
     downloaded: list[Path] = []
     for model_id in profile_models(config, profile):
         if model_id == config.models.agent_id and not model_id.startswith("OpenVINO/"):
-            target = _export_lfm_agent(config)
+            target = _prepare_lfm_agent(config)
         else:
             target = config.model_dir / model_id.split("/")[-1]
             snapshot_download(repo_id=model_id, local_dir=target)

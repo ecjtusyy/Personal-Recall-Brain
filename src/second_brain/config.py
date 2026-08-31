@@ -11,6 +11,7 @@ DEFAULT_EXTENSIONS = (
     ".wav", ".mp3", ".m4a", ".flac",
 )
 DEFAULT_AGENT_ID = "LiquidAI/LFM2.5-2.6B"
+DEFAULT_AGENT_OPENVINO_ID = "mosesman/LFM2.5-2.6B-openvino-int4-npu"
 DEFAULT_AGENT_LOCAL_DIR = "LFM2.5-2.6B-int4-ov"
 
 
@@ -26,6 +27,7 @@ class IngestionConfig:
 @dataclass(frozen=True)
 class ModelConfig:
     agent_id: str = DEFAULT_AGENT_ID
+    agent_openvino_id: str = DEFAULT_AGENT_OPENVINO_ID
     agent_local_dir: str = DEFAULT_AGENT_LOCAL_DIR
     embedding_id: str = "OpenVINO/Qwen3-Embedding-0.6B-int4-cw-ov"
     asr_id: str = "OpenVINO/whisper-small-int8-ov"
@@ -102,6 +104,7 @@ def load_config(path: str | Path = "config.toml") -> AppConfig:
         ),
         models=ModelConfig(
             agent_id=agent_id,
+            agent_openvino_id=str(models_raw.get("agent_openvino_id", DEFAULT_AGENT_OPENVINO_ID)),
             agent_local_dir=str(models_raw.get("agent_local_dir", default_agent_dir)),
             embedding_id=str(models_raw.get("embedding_id", ModelConfig.embedding_id)),
             asr_id=str(models_raw.get("asr_id", ModelConfig.asr_id)),

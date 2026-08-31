@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import second_brain.model_download as model_download
 from second_brain.config import AppConfig, IngestionConfig, ModelConfig
 from second_brain.model_download import _export_lfm_agent
 
@@ -38,3 +39,29 @@ def test_lfm_is_exported_from_official_source_as_openvino_int4(tmp_path):
     assert command[command.index("--group-size") + 1] == "128"
     assert "--sym" in command
     assert command[command.index("--backup-precision") + 1] == "int8_sym"
+
+
+def test_preconverted_lfm_download_never_accepts_repository_scripts(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    source.mkdir()
+    config = AppConfig(
+        config_path=tmp_path / "config.toml",
+        study_year=2026,
+        data_dir=tmp_path / "data",
+        model_dir=tmp_path / "models",
+        device="CPU",
+        source_roots=(source,),
+        ingestion=IngestionConfig(),
+        models=ModelConfig(),
+    )
+    config.ensure_runtime_dirs()
+
+    def fake_download(repo_id, local_dir, allow_patterns):
+        assert repo_id == "mosesman/LFM2.5-2.6B-openvino-int4-npu"
+        assert "run_lfm_device.py" not in allow_patterns
+        target = Path(local_dir)
+        target.mkdir(parents=True)
+        (target / "openvino_model.xml").write_text("<xml/>", encoding="utf-8")
+
+    monkeypatch.setattr(model_download, "snapshot_download", fake_download)
+    assert model_download._prepare_lfm_agent(config) == config.agent_model_path

@@ -26,11 +26,11 @@
 | 语义检索 | `OpenVINO/Qwen3-Embedding-0.6B-int4-cw-ov` | 默认关闭，可选开启 |
 | 复杂图片 | `OpenVINO/Qwen3.5-4B-int8-ov` | 默认关闭，只按需加载并缓存结果 |
 
-核心 Agent 使用 LiquidAI 官方权重，由 Optimum Intel 在本机转换为 INT4 OpenVINO IR，再由 OpenVINO GenAI 在 CPU 上运行。其他模型优先使用 OpenVINO 官方优化仓库。
+核心 Agent 的上游是 LiquidAI 官方权重，默认下载按 Optimum Intel 官方配方生成的 INT4 OpenVINO IR，再由 OpenVINO GenAI 在 CPU 上运行。下载流程只接收模型、tokenizer、配置和许可证文件，不执行模型仓库脚本；也保留从官方权重本地转换的回退能力。
 
 ## 一键使用
 
-1. 双击 `安装与下载模型.bat`。首次安装会准备独立环境、下载约 5.4GB 的 LiquidAI 原始权重，再在本机生成约 2GB 的 OpenVINO INT4 模型；请预留至少 10GB 空间和较长转换时间。
+1. 双击 `安装与下载模型.bat`。首次安装会准备独立环境并下载约 1.6GB 的 LFM2.5-2.6B OpenVINO INT4 模型。
 2. 检查 `config.toml` 中的资料目录。默认已经配置：
 
    - `D:\本科期间学习\日记`

@@ -25,7 +25,7 @@ if (-not (Test-Path -LiteralPath ".venv\Scripts\python.exe")) {
 }
 $venvPython = (Resolve-Path -LiteralPath ".venv\Scripts\python.exe").Path
 & $venvPython -m pip install --upgrade pip
-& $venvPython -m pip install -e ".[dev,conversion]"
+& $venvPython -m pip install -e ".[dev]"
 
 Write-Host "[3/4] 初始化安全配置" -ForegroundColor Cyan
 if (-not (Test-Path -LiteralPath "config.toml")) {
@@ -33,7 +33,7 @@ if (-not (Test-Path -LiteralPath "config.toml")) {
 }
 & $venvPython -m second_brain.cli --config config.toml init
 
-Write-Host "[4/4] 下载 LFM2.5-2.6B 并转换为 Intel OpenVINO INT4（首次耗时较长）" -ForegroundColor Cyan
+Write-Host "[4/4] 下载 LFM2.5-2.6B 的 OpenVINO INT4 模型" -ForegroundColor Cyan
 & $venvPython -m second_brain.cli --config config.toml download-models --profile core
 
 Write-Host "安装完成。双击 '启动第二大脑.bat' 即可使用。" -ForegroundColor Green
