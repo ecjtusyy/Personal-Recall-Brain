@@ -13,6 +13,7 @@ from ..dates import resolve_event_date
 from ..db import transaction
 from ..fingerprint import sha256_bytes, sha256_file
 from ..models import Chunk, ScanStats, TextBlock
+from ..memory.cards import build_memory_card
 from .audio_pipeline import OpenVINOASREngine
 from .image_pipeline import OpenVINOOCREngine
 from .text_parser import parse_text_source
@@ -140,6 +141,7 @@ class Scanner:
             if (initial.st_size, initial.st_mtime_ns) != (final.st_size, final.st_mtime_ns):
                 raise RuntimeError("索引期间源文件发生变化，请稍后重试")
             self.conn.execute("UPDATE documents SET status='ready', error=NULL WHERE id=?", (document_id,))
+            build_memory_card(self.conn, document_id)
 
     def _ocr_engine(self) -> OpenVINOOCREngine:
         if self._ocr is None:
@@ -217,4 +219,3 @@ class Scanner:
             (canonical, fingerprint, path.name, path.suffix.lower().lstrip("."), path.stem, _utcnow(), error[:2000]),
         )
         self.conn.commit()
-
