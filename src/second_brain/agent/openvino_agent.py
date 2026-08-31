@@ -137,6 +137,10 @@ JSON："""
     def _grounded(self, answer: str, evidence: list[dict[str, Any]]) -> bool:
         allowed_dates = {item.get("event_date") for item in evidence if item.get("event_date")}
         allowed_files = {item["filename"] for item in evidence}
+        if "JSON" in answer.upper():
+            return False
+        if allowed_files and not any(filename in answer for filename in allowed_files):
+            return False
         if any(date not in allowed_dates for date in DATE_PATTERN.findall(answer)):
             return False
         for name in FILE_PATTERN.findall(answer):
@@ -154,10 +158,12 @@ JSON："""
         fallback = self._deterministic_answer(question, evidence)
         if not evidence or not self.config.models.agent_enabled or not self.model.available:
             return AgentAnswer(fallback, evidence, plan, "deterministic")
+        ordered = sorted(evidence[:10], key=lambda item: (item.get("event_date") or "9999-99-99", item["filename"]))
         compact = [{key: item[key] for key in ("event_date", "filename", "path", "snippet", "source_kind")}
-                   for item in evidence[:10]]
+                   for item in ordered]
         prompt = f"""你是个人第二大脑。只根据下面证据回答用户，不得编造日期、文件名、路径或学习事实。
-先直接回答，再按时间列出关键证据，最后列出来源。证据不足要明确说不足。使用中文。
+先直接回答，再按日期从早到晚列出关键证据，最后列出来源。至少原样引用一个证据中的 filename；
+不得把 JSON、数据库或“内部资料”称为来源。证据不足要明确说不足。使用中文。
 用户问题：{question}
 证据 JSON：{json.dumps(compact, ensure_ascii=False)}
 不要展示思考过程，只输出简洁答案。/no_think

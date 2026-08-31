@@ -67,6 +67,16 @@ def test_hallucinated_date_forces_deterministic_fallback(tmp_path):
     assert "2026-08-21" in answer.answer
 
 
+def test_answer_without_real_filename_forces_fallback(tmp_path):
+    model = FakeModel([
+        '{"tool":"search_memory","query":"申论"}',
+        "复习过，来源是证据 JSON。",
+    ])
+    answer = RecallAgent(config(tmp_path), FakeTools(), model).answer("申论")
+    assert answer.mode == "deterministic"
+    assert "8.21 申论.docx" in answer.answer
+
+
 def test_model_unavailable_keeps_recall_working(tmp_path):
     model = FakeModel([], available=False)
     answer = RecallAgent(config(tmp_path), FakeTools(), model).answer("8.21 那天学了什么？")
