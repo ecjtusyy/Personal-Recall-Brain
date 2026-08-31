@@ -26,9 +26,12 @@ class OpenVINOOCREngine:
 
     def ocr(self, image_path: Path) -> OCRResult:
         result = self._load()(str(image_path))
-        texts = list(getattr(result, "txts", None) or [])
-        scores = [float(x) for x in (getattr(result, "scores", None) or [])]
-        boxes = list(getattr(result, "boxes", None) or [])
+        raw_texts = getattr(result, "txts", None)
+        raw_scores = getattr(result, "scores", None)
+        raw_boxes = getattr(result, "boxes", None)
+        texts = [] if raw_texts is None else [str(value) for value in raw_texts]
+        scores = [] if raw_scores is None else [float(value) for value in raw_scores]
+        boxes = [] if raw_boxes is None else list(raw_boxes)
         if not texts and isinstance(result, (list, tuple)):
             rows = result[0] if len(result) == 2 and isinstance(result[0], list) else result
             for row in rows or []:
@@ -38,4 +41,3 @@ class OpenVINOOCREngine:
                     scores.append(float(row[2]))
         confidence = sum(scores) / len(scores) if scores else 0.0
         return OCRResult("\n".join(texts).strip(), confidence, boxes)
-
