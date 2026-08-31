@@ -14,6 +14,7 @@ from ..db import transaction
 from ..fingerprint import sha256_bytes, sha256_file
 from ..models import Chunk, ScanStats, TextBlock
 from ..memory.cards import build_memory_card
+from ..memory.consolidation import consolidate_memory
 from .audio_pipeline import OpenVINOASREngine
 from .text_parser import parse_text_source
 
@@ -93,6 +94,13 @@ class Scanner:
             (_utcnow(), stats.files_seen, stats.files_changed, stats.files_failed, stats.files_skipped, run_id),
         )
         self.conn.commit()
+        if stats.files_changed:
+            self.progress("正在整合情节记忆、概念记忆和学习状态…")
+            memory_stats = consolidate_memory(self.conn)
+            self.progress(
+                f"记忆整合完成：{memory_stats.episodes_written} 个学习日，"
+                f"{memory_stats.concepts_written} 个概念"
+            )
         return stats
 
     def _upsert_document(self, path: Path, canonical: str, fingerprint: str, parsed, date_info) -> int:

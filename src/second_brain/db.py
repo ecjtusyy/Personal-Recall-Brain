@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Iterator
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 def _configure(conn: sqlite3.Connection) -> None:
@@ -99,6 +99,65 @@ def migrate(conn: sqlite3.Connection) -> None:
             vector BLOB NOT NULL,
             updated_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS episodes (
+            id INTEGER PRIMARY KEY,
+            event_date TEXT UNIQUE NOT NULL,
+            activity TEXT NOT NULL DEFAULT 'study',
+            subjects_json TEXT NOT NULL DEFAULT '[]',
+            summary TEXT NOT NULL DEFAULT '',
+            source_document_ids_json TEXT NOT NULL DEFAULT '[]',
+            content_hash TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_episodes_event_date ON episodes(event_date);
+        CREATE TABLE IF NOT EXISTS concepts (
+            id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL,
+            subject TEXT NOT NULL,
+            first_seen TEXT,
+            last_seen TEXT,
+            exposure_count INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL,
+            UNIQUE(subject, name)
+        );
+        CREATE INDEX IF NOT EXISTS idx_concepts_subject ON concepts(subject);
+        CREATE INDEX IF NOT EXISTS idx_concepts_last_seen ON concepts(last_seen);
+        CREATE TABLE IF NOT EXISTS concept_evidence (
+            concept_id INTEGER NOT NULL REFERENCES concepts(id) ON DELETE CASCADE,
+            chunk_id INTEGER NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,
+            event_date TEXT,
+            relevance REAL NOT NULL DEFAULT 1.0,
+            PRIMARY KEY(concept_id, chunk_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_concept_evidence_date ON concept_evidence(event_date);
+        CREATE TABLE IF NOT EXISTS concept_states (
+            concept_id INTEGER PRIMARY KEY REFERENCES concepts(id) ON DELETE CASCADE,
+            state TEXT NOT NULL DEFAULT 'seen',
+            current_summary TEXT NOT NULL DEFAULT '',
+            remaining_problem TEXT NOT NULL DEFAULT '',
+            confidence REAL NOT NULL DEFAULT 0.0,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS consolidation_runs (
+            id INTEGER PRIMARY KEY,
+            started_at TEXT NOT NULL,
+            finished_at TEXT,
+            documents_seen INTEGER NOT NULL DEFAULT 0,
+            episodes_written INTEGER NOT NULL DEFAULT 0,
+            concepts_written INTEGER NOT NULL DEFAULT 0,
+            error TEXT
+        );
+        CREATE TABLE IF NOT EXISTS analysis_cache (
+            request_hash TEXT PRIMARY KEY,
+            question TEXT NOT NULL,
+            intent TEXT NOT NULL,
+            subject TEXT,
+            answer TEXT NOT NULL,
+            evidence_ids_json TEXT NOT NULL DEFAULT '[]',
+            model_id TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_analysis_cache_created ON analysis_cache(created_at);
         """
     )
     asset_columns = {row["name"] for row in conn.execute("PRAGMA table_info(assets)")}

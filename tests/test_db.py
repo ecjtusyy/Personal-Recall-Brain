@@ -6,7 +6,10 @@ from second_brain.db import SCHEMA_VERSION, open_db
 def test_schema_and_fts_are_created(tmp_path):
     conn = open_db(tmp_path / "brain.db")
     names = {row[0] for row in conn.execute("SELECT name FROM sqlite_master")}
-    assert {"documents", "chunks", "assets", "memory_cards", "ingestion_runs", "embeddings", "chunks_fts"} <= names
+    assert {
+        "documents", "chunks", "assets", "memory_cards", "ingestion_runs", "embeddings", "chunks_fts",
+        "episodes", "concepts", "concept_evidence", "concept_states", "consolidation_runs", "analysis_cache",
+    } <= names
     conn.close()
 
 
