@@ -161,15 +161,14 @@ JSON："""
         ordered = sorted(evidence[:10], key=lambda item: (item.get("event_date") or "9999-99-99", item["filename"]))
         compact = [{key: item[key] for key in ("event_date", "filename", "path", "snippet", "source_kind")}
                    for item in ordered]
-        prompt = f"""你是个人第二大脑。只根据下面证据回答用户，不得编造日期、文件名、路径或学习事实。
-先直接回答，再按日期从早到晚列出关键证据，最后列出来源。至少原样引用一个证据中的 filename；
-不得把 JSON、数据库或“内部资料”称为来源。证据不足要明确说不足。使用中文。
+        prompt = f"""你是个人第二大脑。只根据下面证据概括学习情况，不得编造学习事实。
+只输出一段不超过 100 字的中文结论；不要写日期、文件名、路径、编号或来源，因为程序会附加经过校验的时间和来源。
 用户问题：{question}
 证据 JSON：{json.dumps(compact, ensure_ascii=False)}
 不要展示思考过程，只输出简洁答案。/no_think
 回答："""
         try:
-            generated = self.model.generate(prompt, min(self.config.models.max_new_tokens, 384))
+            generated = self.model.generate(prompt, min(self.config.models.max_new_tokens, 160))
             generated = re.sub(r"JSON", "本地证据", generated, flags=re.I)
             if generated:
                 seen_documents: set[int] = set()
@@ -179,7 +178,9 @@ JSON："""
                         continue
                     seen_documents.add(item["document_id"])
                     source_lines.append(
-                        f"- {item.get('event_date') or '日期不确定'}｜{item['filename']}\n  {item['path']}"
+                        f"- 日期：{item.get('event_date') or '日期不确定'}\n"
+                        f"  文件：{item['filename']}\n"
+                        f"  路径：{item['path']}"
                     )
                 grounded_answer = f"{generated.rstrip()}\n\n可追溯来源：\n" + "\n".join(source_lines[:8])
                 if self._grounded(grounded_answer, evidence):

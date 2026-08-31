@@ -55,6 +55,7 @@ def test_agent_plans_tool_and_synthesizes_grounded_answer(tmp_path):
     assert answer.plan["tool"] == "search_memory"
     assert tools.calls[0][1] == "申论"
     assert all("/no_think" in prompt for prompt in model.prompts)
+    assert "不要写日期、文件名、路径" in model.prompts[1]
     assert "可追溯来源" in answer.answer
 
 
