@@ -75,7 +75,7 @@ get_timeline 参数：start_date,end_date,topic。
 不要展开思考，只做工具选择。
 JSON："""
         try:
-            candidate = _json_object(self.model.generate(prompt, 180))
+            candidate = _json_object(self.model.generate(prompt, min(self.config.models.max_new_tokens, 384)))
         except Exception:
             return fallback
         if not candidate or candidate.get("tool") not in {"search_memory", "get_timeline"}:
@@ -149,7 +149,7 @@ JSON："""
 不要展示思考过程，只输出简洁答案。
 回答："""
         try:
-            generated = self.model.generate(prompt, min(self.config.models.max_new_tokens, 160))
+            generated = self.model.generate(prompt, self.config.models.max_new_tokens)
             generated = re.sub(r"JSON", "本地证据", generated, flags=re.I)
             if generated:
                 seen_documents: set[int] = set()

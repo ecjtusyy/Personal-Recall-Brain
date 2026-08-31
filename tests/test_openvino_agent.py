@@ -63,6 +63,16 @@ def test_agent_plans_tool_and_synthesizes_grounded_answer(tmp_path):
     assert "可追溯来源" in answer.answer
 
 
+def test_truncated_reasoning_forces_safe_fallback(tmp_path):
+    model = FakeModel([
+        '{"tool":"search_memory","query":"申论"}',
+        "",
+    ])
+    answer = RecallAgent(config(tmp_path), FakeTools(), model).answer("申论")
+    assert answer.mode == "deterministic"
+    assert "找到了 1 份相关资料" in answer.answer
+
+
 def test_hallucinated_date_forces_deterministic_fallback(tmp_path):
     model = FakeModel([
         '{"tool":"search_memory","query":"申论"}',

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 
@@ -38,9 +37,23 @@ class OpenVINOLFMModel:
         self._load()
 
     def generate(self, prompt: str, max_new_tokens: int | None = None) -> str:
-        result = self._load().generate(
-            prompt,
+        pipeline = self._load()
+        chat_prompt = pipeline.get_tokenizer().apply_chat_template(
+            [{"role": "user", "content": prompt}],
+            add_generation_prompt=True,
+        )
+        # The 2.6B checkpoint normally starts a long reasoning trace because
+        # its template ends with <think>. A short prefilled reasoning sentence
+        # keeps the model as the decision maker while making local CPU latency
+        # practical and ensuring only its final response is returned.
+        final_prompt = (
+            f"{chat_prompt}I will follow the instructions and return only the requested result."
+            "</think>\n"
+        )
+        result = pipeline.generate(
+            final_prompt,
             max_new_tokens=max_new_tokens or self.max_new_tokens,
+            apply_chat_template=False,
             do_sample=True,
             temperature=0.1,
             top_k=50,
@@ -48,7 +61,9 @@ class OpenVINOLFMModel:
             rng_seed=42,
         )
         text = str(result).strip()
-        return re.sub(r"<think>.*?</think>", "", text, flags=re.S).strip()
+        if "</think>" in text:
+            text = text.rsplit("</think>", 1)[-1]
+        return text.strip()
 
     def unload(self) -> None:
         self._pipeline = None
