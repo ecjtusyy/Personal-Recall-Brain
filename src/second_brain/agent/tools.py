@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import hashlib
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from ..config import AppConfig
 from ..retrieval.hybrid import hybrid_search
+from ..retrieval.semantic import OpenVINOEmbedder, SemanticIndex
 from ..retrieval.timeline import get_timeline as timeline_query
 
 
@@ -13,10 +16,21 @@ class MemoryTools:
     def __init__(self, config: AppConfig, conn: sqlite3.Connection) -> None:
         self.config = config
         self.conn = conn
+        embedding_path = config.model_dir / config.models.embedding_id.split("/")[-1]
+        self.semantic = SemanticIndex(conn, OpenVINOEmbedder(embedding_path, config.device)) if config.models.semantic_enabled else None
 
     def search_memory(self, query: str, start_date: str | None = None, end_date: str | None = None,
                       file_type: str | None = None, limit: int = 12) -> list[dict[str, Any]]:
-        return [item.as_dict() for item in hybrid_search(self.conn, query, start_date, end_date, file_type, limit)]
+        return [item.as_dict() for item in hybrid_search(
+            self.conn, query, start_date, end_date, file_type, limit, self.semantic,
+        )]
+
+    def build_semantic_index(self, limit: int | None = None) -> dict[str, Any]:
+        if self.semantic is None:
+            return {"ok": False, "error": "语义检索未启用", "indexed": 0}
+        if not self.semantic.available:
+            return {"ok": False, "error": "OpenVINO 语义模型尚未下载", "indexed": 0}
+        return {"ok": True, "indexed": self.semantic.index_missing(limit)}
 
     def get_document(self, document_id: int) -> dict[str, Any] | None:
         row = self.conn.execute(
@@ -56,6 +70,46 @@ class MemoryTools:
             return {"ok": False, "error": "来源路径不在允许的只读资料目录中"}
         return {"ok": path.exists(), "path": str(path), "error": None if path.exists() else "源文件当前不可见"}
 
+    def analyze_image(self, asset_id: int) -> dict[str, Any]:
+        row = self.conn.execute("SELECT * FROM assets WHERE id=?", (asset_id,)).fetchone()
+        if not row:
+            return {"ok": False, "error": "图片资产不存在"}
+        if row["vlm_caption"]:
+            return {"ok": True, "cached": True, "description": row["vlm_caption"]}
+        if not self.config.models.vision_enabled:
+            return {"ok": False, "error": "按需视觉分析未启用"}
+        path = Path(row["stored_path"]).resolve(strict=False)
+        allowed_roots = (*self.config.source_roots, self.config.assets_dir.resolve(strict=False))
+        if not any(path == root or root in path.parents for root in allowed_roots):
+            return {"ok": False, "error": "图片路径不在允许范围"}
+        from .qwen_vision_adapter import OpenVINOVisionEngine
+
+        model_path = self.config.model_dir / self.config.models.vision_id.split("/")[-1]
+        engine = OpenVINOVisionEngine(model_path, self.config.device)
+        if not engine.available:
+            return {"ok": False, "error": "OpenVINO 视觉模型尚未下载"}
+        try:
+            result = engine.analyze(path)
+        finally:
+            engine.unload()
+        description = str(result["description"])
+        self.conn.execute("UPDATE assets SET vlm_caption=?, vlm_status='ready' WHERE id=?", (description, asset_id))
+        content_hash = hashlib.sha256(description.encode("utf-8")).hexdigest()
+        chunk_index = self.conn.execute(
+            "SELECT COALESCE(MAX(chunk_index), -1) + 1 FROM chunks WHERE document_id=?", (row["document_id"],)
+        ).fetchone()[0]
+        cursor = self.conn.execute(
+            "INSERT INTO chunks(document_id, block_index, chunk_index, source_kind, content, content_hash) VALUES(?, ?, ?, 'vlm', ?, ?)",
+            (row["document_id"], 200000 + asset_id, chunk_index, description, content_hash),
+        )
+        document = self.conn.execute("SELECT filename, title FROM documents WHERE id=?", (row["document_id"],)).fetchone()
+        self.conn.execute(
+            "INSERT INTO chunks_fts(document_id, chunk_id, filename, title, content) VALUES(?, ?, ?, ?, ?)",
+            (row["document_id"], cursor.lastrowid, document["filename"], document["title"] or "", description),
+        )
+        self.conn.commit()
+        return {"ok": True, "cached": False, "description": description}
+
     def status(self) -> dict[str, Any]:
         counts = self.conn.execute(
             "SELECT COUNT(*) AS total, SUM(status='ready') AS ready, SUM(status='failed') AS failed, "
@@ -64,4 +118,3 @@ class MemoryTools:
         chunks = self.conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
         latest = self.conn.execute("SELECT * FROM ingestion_runs ORDER BY id DESC LIMIT 1").fetchone()
         return {"documents": dict(counts), "chunks": chunks, "latest_run": dict(latest) if latest else None}
-
