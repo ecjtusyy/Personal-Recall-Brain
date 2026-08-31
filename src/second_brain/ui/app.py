@@ -6,6 +6,7 @@ from pathlib import Path
 import streamlit as st
 
 from second_brain.agent.openvino_agent import RecallAgent
+from second_brain.agent.lfm_adapter import OpenVINOLFMModel
 from second_brain.agent.tools import MemoryTools
 from second_brain.config import load_config
 from second_brain.db import open_db
@@ -19,33 +20,45 @@ st.set_page_config(page_title="Personal Recall Brain", page_icon="🧠", layout=
 
 
 @st.cache_resource
-def runtime(config_path: str):
-    config = load_config(config_path)
-    conn = open_db(config.db_path)
-    return config, conn
+def cached_config(config_path: str):
+    return load_config(config_path)
 
 
 @st.cache_resource
-def agent_runtime(config_path: str):
-    agent_config, agent_conn = runtime(config_path)
-    return RecallAgent(agent_config, MemoryTools(agent_config, agent_conn))
+def resident_model(config_path: str):
+    model_config = load_config(config_path)
+    return OpenVINOLFMModel(
+        model_config.agent_model_path,
+        model_config.device,
+        model_config.models.max_new_tokens,
+    )
 
 
 CONFIG_PATH = os.environ.get("SECOND_BRAIN_CONFIG", "config.toml")
-config, conn = runtime(str(Path(CONFIG_PATH).resolve()))
+RESOLVED_CONFIG_PATH = str(Path(CONFIG_PATH).resolve())
+config = cached_config(RESOLVED_CONFIG_PATH)
+# Streamlit may rerun the page in a different worker thread. SQLite connections
+# therefore belong to this run only and must never be stored in cache_resource.
+conn = open_db(config.db_path)
 tools = MemoryTools(config, conn)
-resident_agent = None
+resident_lfm = None
 
 
-def open_document(document_id: int) -> None:
-    result = tools.open_source(document_id)
-    if not result.get("ok"):
-        st.error(result.get("error") or "无法打开来源")
+def open_document(path: str) -> None:
+    candidate = Path(path).resolve()
+    allowed = any(candidate.is_relative_to(root.resolve()) for root in config.source_roots)
+    if not allowed or not candidate.exists():
+        st.error("来源不在允许的只读资料目录中，或文件当前不存在。")
         return
     if os.name == "nt":
-        os.startfile(result["path"])
+        os.startfile(candidate)
     else:
-        st.info(result["path"])
+        st.info(str(candidate))
+
+
+def rerun_page() -> None:
+    conn.close()
+    st.rerun()
 
 
 def show_evidence(items, prefix: str) -> None:
@@ -60,8 +73,8 @@ def show_evidence(items, prefix: str) -> None:
             left.caption(f"证据类型：{item['source_kind']}　日期来源：{item.get('date_source') or '未知'}")
             left.write(item["snippet"])
             left.code(item["path"], language=None)
-            right.button("打开原文件", key=f"{prefix}-open-{item['chunk_id']}", on_click=open_document,
-                         args=(item["document_id"],), use_container_width=True)
+            if right.button("打开原文件", key=f"{prefix}-open-{item['chunk_id']}", use_container_width=True):
+                open_document(item["path"])
 
 
 status = tools.status()
@@ -78,7 +91,7 @@ with st.sidebar:
         stats = Scanner(config, conn, progress=progress.write).scan()
         progress.update(label=f"扫描完成：更新 {stats.files_changed}，跳过 {stats.files_skipped}，失败 {stats.files_failed}",
                         state="complete" if not stats.files_failed else "error")
-        st.rerun()
+        rerun_page()
     images = status.get("images") or {}
     pending_images = images.get("pending") or 0
     if pending_images:
@@ -90,7 +103,7 @@ with st.sidebar:
                 label=f"本批完成 {result.completed} 张，识别到文字 {result.with_text} 张，失败 {result.failed} 张",
                 state="complete" if not result.failed else "error",
             )
-            st.rerun()
+            rerun_page()
     st.divider()
     agent_path = config.agent_model_path / "openvino_model.xml"
     st.write("核心 Agent", "LFM2.5-2.6B · OpenVINO INT4")
@@ -101,18 +114,18 @@ with st.sidebar:
                 for model_path in download_models(config.config_path, "core"):
                     st.write(model_path)
                 model_status.update(label="核心模型下载完成", state="complete")
-                st.rerun()
+                rerun_page()
             except Exception as exc:
                 model_status.update(label=f"下载失败：{exc}", state="error")
     if agent_path.exists():
         with st.status("正在加载常驻 LFM Agent…", expanded=False) as resident_status:
             try:
-                resident_agent = agent_runtime(str(Path(CONFIG_PATH).resolve()))
-                resident_agent.warmup()
+                resident_lfm = resident_model(RESOLVED_CONFIG_PATH)
+                resident_lfm.warmup()
                 resident_status.update(label="LFM2.5-2.6B 已常驻内存", state="complete")
             except Exception as exc:
                 resident_status.update(label=f"LFM 常驻加载失败：{exc}", state="error")
-                resident_agent = None
+                resident_lfm = None
     st.caption("模型只写入项目 models 目录；不会写入学习资料目录。")
 
 st.title("Personal Recall Brain")
@@ -134,7 +147,7 @@ with chat_tab:
             st.write(question)
         with st.chat_message("assistant"):
             with st.spinner("正在检索本地证据…"):
-                active_agent = resident_agent or agent_runtime(str(Path(CONFIG_PATH).resolve()))
+                active_agent = RecallAgent(config, tools, model=resident_lfm)
                 result = active_agent.answer(question)
             st.markdown(result.answer)
             st.caption("回答模式：常驻 LFM2.5-2.6B · OpenVINO" if result.mode == "openvino" else "回答模式：确定性检索（模型未加载或回答校验未通过）")
@@ -183,3 +196,5 @@ with status_tab:
     latest = status.get("latest_run")
     if latest:
         st.json(latest)
+
+conn.close()
