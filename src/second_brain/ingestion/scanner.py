@@ -15,7 +15,6 @@ from ..fingerprint import sha256_bytes, sha256_file
 from ..models import Chunk, ScanStats, TextBlock
 from ..memory.cards import build_memory_card
 from .audio_pipeline import OpenVINOASREngine
-from .image_pipeline import OpenVINOOCREngine
 from .text_parser import parse_text_source
 
 
@@ -46,13 +45,11 @@ class Scanner:
         config: AppConfig,
         conn: sqlite3.Connection,
         progress: Callable[[str], None] | None = None,
-        ocr_engine: OpenVINOOCREngine | None = None,
         asr_engine: OpenVINOASREngine | None = None,
     ) -> None:
         self.config = config
         self.conn = conn
         self.progress = progress or (lambda _message: None)
-        self._ocr = ocr_engine
         asr_path = config.model_dir / config.models.asr_id.split("/")[-1]
         self._asr = asr_engine or OpenVINOASREngine(asr_path, config.device)
 
@@ -122,10 +119,10 @@ class Scanner:
             self.conn.execute("DELETE FROM chunks WHERE document_id=?", (document_id,))
             self.conn.execute("DELETE FROM assets WHERE document_id=?", (document_id,))
             chunks = chunk_blocks(parsed.text_blocks)
-            self._store_assets(document_id, fingerprint, parsed.assets, chunks)
+            self._store_assets(document_id, fingerprint, parsed.assets)
             suffix = path.suffix.lower()
             if suffix in IMAGE_TYPES:
-                self._store_standalone_image(document_id, path, chunks)
+                self._store_standalone_image(document_id, path)
             elif suffix in AUDIO_TYPES:
                 self._store_audio(path, chunks)
             for chunk in chunks:
@@ -143,12 +140,7 @@ class Scanner:
             self.conn.execute("UPDATE documents SET status='ready', error=NULL WHERE id=?", (document_id,))
             build_memory_card(self.conn, document_id)
 
-    def _ocr_engine(self) -> OpenVINOOCREngine:
-        if self._ocr is None:
-            self._ocr = OpenVINOOCREngine()
-        return self._ocr
-
-    def _store_assets(self, document_id: int, fingerprint: str, assets, chunks: list[Chunk]) -> None:
+    def _store_assets(self, document_id: int, fingerprint: str, assets) -> None:
         if not assets:
             return
         folder = self.config.assets_dir / fingerprint[:16]
@@ -158,40 +150,22 @@ class Scanner:
             stored = folder / safe_name
             stored.write_bytes(asset.data)
             asset_hash = sha256_bytes(asset.data)
-            ocr_text = ""
-            confidence = 0.0
-            if self.config.ingestion.enable_ocr and stored.suffix.lower() in IMAGE_TYPES:
-                try:
-                    result = self._ocr_engine().ocr(stored)
-                    ocr_text, confidence = result.text, result.confidence
-                except Exception as exc:
-                    self.progress(f"图片 OCR 暂缓：{asset.original_name}（{exc}）")
+            ocr_status = "pending" if self.config.ingestion.enable_ocr and stored.suffix.lower() in IMAGE_TYPES else "disabled"
             self.conn.execute(
                 """INSERT INTO assets(document_id, order_index, original_name, stored_path, mime_type, sha256,
-                                      context_before, context_after, ocr_text, ocr_confidence, vlm_status)
-                   VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                      context_before, context_after, ocr_text, ocr_confidence, ocr_status, vlm_status)
+                   VALUES(?, ?, ?, ?, ?, ?, ?, ?, '', 0, ?, ?)""",
                 (document_id, asset.order_index, asset.original_name, str(stored), asset.mime_type, asset_hash,
-                 asset.context_before, asset.context_after, ocr_text, confidence, "pending"),
+                 asset.context_before, asset.context_after, ocr_status, "pending"),
             )
-            if ocr_text:
-                block = 100000 + asset.order_index
-                chunks.extend(chunk_blocks([TextBlock(block, ocr_text, "ocr")], source_kind="ocr"))
 
-    def _store_standalone_image(self, document_id: int, path: Path, chunks: list[Chunk]) -> None:
-        ocr_text = ""
-        confidence = 0.0
-        if self.config.ingestion.enable_ocr:
-            try:
-                result = self._ocr_engine().ocr(path)
-                ocr_text, confidence = result.text, result.confidence
-            except Exception as exc:
-                self.progress(f"图片 OCR 暂缓：{path.name}（{exc}）")
+    def _store_standalone_image(self, document_id: int, path: Path) -> None:
+        ocr_status = "pending" if self.config.ingestion.enable_ocr else "disabled"
         self.conn.execute(
-            "INSERT INTO assets(document_id, order_index, original_name, stored_path, mime_type, sha256, ocr_text, ocr_confidence, vlm_status) VALUES(?, 0, ?, ?, ?, ?, ?, ?, ?)",
-            (document_id, path.name, str(path), None, sha256_file(path), ocr_text, confidence, "pending"),
+            "INSERT INTO assets(document_id, order_index, original_name, stored_path, mime_type, sha256, "
+            "ocr_text, ocr_confidence, ocr_status, vlm_status) VALUES(?, 0, ?, ?, ?, ?, '', 0, ?, ?)",
+            (document_id, path.name, str(path), None, sha256_file(path), ocr_status, "pending"),
         )
-        if ocr_text:
-            chunks.extend(chunk_blocks([TextBlock(0, ocr_text, "ocr")], source_kind="ocr"))
 
     def _store_audio(self, path: Path, chunks: list[Chunk]) -> None:
         if not self.config.ingestion.enable_asr:

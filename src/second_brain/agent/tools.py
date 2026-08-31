@@ -116,5 +116,15 @@ class MemoryTools:
             "SUM(status='missing') AS missing FROM documents"
         ).fetchone()
         chunks = self.conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+        ocr = self.conn.execute(
+            "SELECT COUNT(*) AS total, SUM(ocr_status='pending') AS pending, "
+            "SUM(ocr_status='done') AS done, SUM(ocr_status='failed') AS failed, "
+            "SUM(COALESCE(ocr_text, '') <> '') AS with_text FROM assets"
+        ).fetchone()
         latest = self.conn.execute("SELECT * FROM ingestion_runs ORDER BY id DESC LIMIT 1").fetchone()
-        return {"documents": dict(counts), "chunks": chunks, "latest_run": dict(latest) if latest else None}
+        return {
+            "documents": dict(counts),
+            "chunks": chunks,
+            "images": dict(ocr),
+            "latest_run": dict(latest) if latest else None,
+        }

@@ -8,6 +8,7 @@ from .agent.openvino_agent import RecallAgent
 from .agent.tools import MemoryTools
 from .config import load_config
 from .db import open_db
+from .ingestion.enrichment import ImageEnricher
 from .ingestion.scanner import Scanner
 from .model_download import download_models
 
@@ -42,6 +43,13 @@ def cmd_search(args) -> int:
     return 0
 
 
+def cmd_enrich_images(args) -> int:
+    config, conn = _runtime(args.config)
+    stats = ImageEnricher(config, conn, progress=print).enrich(args.limit, args.retry_failed)
+    print(json.dumps(stats.__dict__, ensure_ascii=False, indent=2))
+    return 0 if stats.failed == 0 else 2
+
+
 def cmd_ask(args) -> int:
     config, conn = _runtime(args.config)
     tools = MemoryTools(config, conn)
@@ -74,6 +82,10 @@ def build_parser() -> argparse.ArgumentParser:
     init.set_defaults(func=cmd_init)
     scan = sub.add_parser("scan", help="只读扫描资料")
     scan.set_defaults(func=cmd_scan)
+    enrich = sub.add_parser("enrich-images", help="用 OpenVINO 分批补充图片文字")
+    enrich.add_argument("--limit", type=int, default=200, help="本批最多处理的图片数")
+    enrich.add_argument("--retry-failed", action="store_true", help="同时重试上次失败的图片")
+    enrich.set_defaults(func=cmd_enrich_images)
     search = sub.add_parser("search", help="证据检索")
     search.add_argument("query")
     search.add_argument("--start-date")
@@ -99,4 +111,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

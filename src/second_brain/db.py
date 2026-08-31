@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Iterator
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def _configure(conn: sqlite3.Connection) -> None:
@@ -66,6 +66,9 @@ def migrate(conn: sqlite3.Connection) -> None:
             context_after TEXT,
             ocr_text TEXT,
             ocr_confidence REAL,
+            ocr_status TEXT NOT NULL DEFAULT 'pending',
+            ocr_error TEXT,
+            ocr_attempted_at TEXT,
             vlm_caption TEXT,
             vlm_status TEXT,
             UNIQUE(document_id, stored_path)
@@ -98,6 +101,22 @@ def migrate(conn: sqlite3.Connection) -> None:
         );
         """
     )
+    asset_columns = {row["name"] for row in conn.execute("PRAGMA table_info(assets)")}
+    if "ocr_status" not in asset_columns:
+        conn.execute("ALTER TABLE assets ADD COLUMN ocr_status TEXT NOT NULL DEFAULT 'pending'")
+    if "ocr_error" not in asset_columns:
+        conn.execute("ALTER TABLE assets ADD COLUMN ocr_error TEXT")
+    if "ocr_attempted_at" not in asset_columns:
+        conn.execute("ALTER TABLE assets ADD COLUMN ocr_attempted_at TEXT")
+    conn.execute(
+        "UPDATE assets SET ocr_status=CASE WHEN COALESCE(ocr_text, '') <> '' THEN 'done' ELSE 'pending' END "
+        "WHERE ocr_status IS NULL OR ocr_status = ''"
+    )
+    conn.execute(
+        "UPDATE assets SET ocr_status='done' "
+        "WHERE ocr_status='pending' AND COALESCE(ocr_text, '') <> ''"
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_assets_ocr_status ON assets(ocr_status)")
     try:
         conn.execute(
             "CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5("
@@ -149,4 +168,3 @@ def rebuild_fts(conn: sqlite3.Connection) -> None:
         """
     )
     conn.commit()
-

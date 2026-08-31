@@ -5,7 +5,7 @@
 ## 已实现
 
 - DOCX 正文、标题、表格和内嵌图片发现；PDF、Markdown、TXT 同步索引。
-- 独立图片与 Word 图片用 RapidOCR 的 **OpenVINO 推理后端**识别中文。
+- 独立图片与 Word 图片用 RapidOCR 的 **OpenVINO 推理后端**识别中文；OCR 分批提交、可中断续跑。
 - WAV、MP3、M4A、FLAC 用 **OpenVINO GenAI Whisper**按需转写。
 - SHA-256 增量扫描：未变化的文件不重复解析，单个坏文件不影响整批。
 - SQLite + FTS5 中文全文检索、时间轴、日期来源与置信度。
@@ -21,7 +21,7 @@
 | 能力 | 默认模型 | 加载策略 |
 |---|---|---|
 | 智能问答 | `OpenVINO/Qwen3-1.7B-int4-ov` | 核心模型，回答结束可卸载 |
-| 中文 OCR | RapidOCR PP-OCR + OpenVINO backend | 扫描图片时加载 |
+| 中文 OCR | RapidOCR PP-OCR + OpenVINO backend | 正文扫描后分批加载、逐图保存 |
 | 音频转写 | `OpenVINO/whisper-small-int8-ov` | 仅有音频且模型已下载时加载 |
 | 语义检索 | `OpenVINO/Qwen3-Embedding-0.6B-int4-cw-ov` | 默认关闭，可选开启 |
 | 复杂图片 | `OpenVINO/Qwen3.5-4B-int8-ov` | 默认关闭，只按需加载并缓存结果 |
@@ -37,7 +37,8 @@
    - `D:\本科期间学习\考研`
 
 3. 双击 `启动第二大脑.bat`。
-4. 浏览器打开后先点左侧“立即扫描资料”，完成后即可提问。
+4. 浏览器打开后先点左侧“立即扫描资料”，正文扫描完成后即可提问。
+5. 需要检索图片里的文字时，点“补充下一批图片文字”，或双击 `补充图片文字.bat`。每张图片完成后都会保存，中断后下次从未完成处继续。
 
 也可以先双击 `扫描学习资料.bat` 做离线扫描。
 
@@ -66,6 +67,7 @@
 
 ```powershell
 second-brain scan
+second-brain enrich-images --limit 200
 second-brain search "申论"
 second-brain ask "我以前什么时候复习过申论？"
 second-brain status

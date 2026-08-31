@@ -11,6 +11,7 @@ from second_brain.config import load_config
 from second_brain.db import open_db
 from second_brain.dates import parse_date_query
 from second_brain.ingestion.scanner import Scanner
+from second_brain.ingestion.enrichment import ImageEnricher
 from second_brain.model_download import download_models
 
 
@@ -72,6 +73,19 @@ with st.sidebar:
                         state="complete" if not stats.files_failed else "error")
         st.cache_resource.clear()
         st.rerun()
+    images = status.get("images") or {}
+    pending_images = images.get("pending") or 0
+    if pending_images:
+        st.caption(f"还有 {pending_images} 张图片可补充文字；每批完成后自动保存。")
+        if st.button("补充下一批图片文字（最多 50 张）", use_container_width=True):
+            progress = st.status("OpenVINO 正在识别图片…", expanded=True)
+            result = ImageEnricher(config, conn, progress=progress.write).enrich(limit=50)
+            progress.update(
+                label=f"本批完成 {result.completed} 张，识别到文字 {result.with_text} 张，失败 {result.failed} 张",
+                state="complete" if not result.failed else "error",
+            )
+            st.cache_resource.clear()
+            st.rerun()
     st.divider()
     agent_path = config.model_dir / config.models.agent_id.split("/")[-1] / "openvino_model.xml"
     st.write("智能问答模型", "✅ 已就绪" if agent_path.exists() else "⬇️ 尚未下载")
@@ -152,7 +166,8 @@ with status_tab:
     st.code(str(config.data_dir), language=None)
     if documents.get("failed"):
         st.warning(f"有 {documents['failed']} 个文件解析失败；其他文件不受影响，可在日志中查看原因。")
+    st.subheader("图片文字补充")
+    st.json(status.get("images") or {})
     latest = status.get("latest_run")
     if latest:
         st.json(latest)
-
