@@ -55,6 +55,7 @@ def test_agent_plans_tool_and_synthesizes_grounded_answer(tmp_path):
     assert answer.plan["tool"] == "search_memory"
     assert tools.calls[0][1] == "申论"
     assert all("/no_think" in prompt for prompt in model.prompts)
+    assert "可追溯来源" in answer.answer
 
 
 def test_hallucinated_date_forces_deterministic_fallback(tmp_path):
@@ -67,14 +68,15 @@ def test_hallucinated_date_forces_deterministic_fallback(tmp_path):
     assert "2026-08-21" in answer.answer
 
 
-def test_answer_without_real_filename_forces_fallback(tmp_path):
+def test_program_appends_verified_source_when_model_omits_filename(tmp_path):
     model = FakeModel([
         '{"tool":"search_memory","query":"申论"}',
         "复习过，来源是证据 JSON。",
     ])
     answer = RecallAgent(config(tmp_path), FakeTools(), model).answer("申论")
-    assert answer.mode == "deterministic"
+    assert answer.mode == "openvino"
     assert "8.21 申论.docx" in answer.answer
+    assert "JSON" not in answer.answer
 
 
 def test_model_unavailable_keeps_recall_working(tmp_path):

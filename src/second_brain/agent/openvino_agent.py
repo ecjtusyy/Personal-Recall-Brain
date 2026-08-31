@@ -170,8 +170,20 @@ JSON："""
 回答："""
         try:
             generated = self.model.generate(prompt, min(self.config.models.max_new_tokens, 384))
-            if generated and self._grounded(generated, evidence):
-                return AgentAnswer(generated, evidence, plan, "openvino")
+            generated = re.sub(r"JSON", "本地证据", generated, flags=re.I)
+            if generated:
+                seen_documents: set[int] = set()
+                source_lines: list[str] = []
+                for item in ordered:
+                    if item["document_id"] in seen_documents:
+                        continue
+                    seen_documents.add(item["document_id"])
+                    source_lines.append(
+                        f"- {item.get('event_date') or '日期不确定'}｜{item['filename']}\n  {item['path']}"
+                    )
+                grounded_answer = f"{generated.rstrip()}\n\n可追溯来源：\n" + "\n".join(source_lines[:8])
+                if self._grounded(grounded_answer, evidence):
+                    return AgentAnswer(grounded_answer, evidence, plan, "openvino")
         except Exception:
             pass
         return AgentAnswer(fallback, evidence, plan, "deterministic")
