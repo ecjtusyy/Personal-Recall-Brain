@@ -34,6 +34,8 @@ def iter_source_files(config: AppConfig):
         for current, dirs, files in os.walk(root, followlinks=False):
             dirs[:] = [name for name in dirs if not name.startswith(".")]
             for filename in files:
+                if filename.startswith("~$"):
+                    continue
                 path = Path(current) / filename
                 if path.suffix.lower() in extensions:
                     yield path
@@ -54,6 +56,9 @@ class Scanner:
         self._asr = asr_engine or OpenVINOASREngine(asr_path, config.device)
 
     def scan(self) -> ScanStats:
+        self.conn.execute(
+            "UPDATE documents SET status='ignored', error='Word 临时锁文件，已忽略' WHERE filename LIKE '~$%'"
+        )
         run_id = self.conn.execute("INSERT INTO ingestion_runs(started_at) VALUES(?)", (_utcnow(),)).lastrowid
         self.conn.commit()
         stats = ScanStats()
@@ -63,7 +68,10 @@ class Scanner:
             canonical = str(path.resolve(strict=False))
             seen_paths.add(canonical)
             try:
-                if path.stat().st_size > self.config.ingestion.max_file_mb * 1024 * 1024:
+                file_size = path.stat().st_size
+                if file_size == 0:
+                    raise ValueError("空文件，当前没有可索引内容")
+                if file_size > self.config.ingestion.max_file_mb * 1024 * 1024:
                     stats = replace(stats, files_skipped=stats.files_skipped + 1)
                     continue
                 fingerprint = sha256_file(path)

@@ -113,7 +113,7 @@ class MemoryTools:
     def status(self) -> dict[str, Any]:
         counts = self.conn.execute(
             "SELECT COUNT(*) AS total, SUM(status='ready') AS ready, SUM(status='failed') AS failed, "
-            "SUM(status='missing') AS missing FROM documents"
+            "SUM(status='missing') AS missing, SUM(status='ignored') AS ignored FROM documents"
         ).fetchone()
         chunks = self.conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
         ocr = self.conn.execute(

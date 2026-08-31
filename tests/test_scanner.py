@@ -81,3 +81,36 @@ def test_corrupt_document_does_not_abort_scan(tmp_path):
     assert stats.files_changed == 1
     assert conn.execute("SELECT COUNT(*) FROM documents WHERE status='ready'").fetchone()[0] == 1
 
+
+def test_word_lock_files_are_ignored_and_old_records_are_reclassified(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    lock_file = source / "~$正在编辑.docx"
+    lock_file.write_bytes(b"not a zip")
+    config = make_config(tmp_path, source)
+    config.ensure_runtime_dirs()
+    conn = open_db(config.db_path)
+    conn.execute(
+        "INSERT INTO documents(path, sha256, filename, file_type, status, error) "
+        "VALUES(?, 'old', ?, 'docx', 'failed', 'File is not a zip file')",
+        (str(lock_file.resolve()), lock_file.name),
+    )
+    conn.commit()
+
+    stats = Scanner(config, conn).scan()
+    assert stats.files_seen == 0
+    row = conn.execute("SELECT status, error FROM documents").fetchone()
+    assert row["status"] == "ignored"
+    assert "临时锁文件" in row["error"]
+
+
+def test_empty_document_has_clear_error(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "空白.docx").write_bytes(b"")
+    config = make_config(tmp_path, source)
+    config.ensure_runtime_dirs()
+    conn = open_db(config.db_path)
+    stats = Scanner(config, conn).scan()
+    assert stats.files_failed == 1
+    assert conn.execute("SELECT error FROM documents").fetchone()[0] == "空文件，当前没有可索引内容"
