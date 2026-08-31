@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -10,6 +11,60 @@ from ..config import AppConfig
 from ..retrieval.hybrid import hybrid_search
 from ..retrieval.semantic import OpenVINOEmbedder, SemanticIndex
 from ..retrieval.timeline import get_timeline as timeline_query
+
+
+SUBJECT_HEADINGS = (
+    "高等代数", "高代", "数学分析", "数分", "高等数学", "英语", "申论", "行测", "政治",
+    "计算机", "教资", "教育学",
+)
+TOPIC_ALIASES = {
+    "高等代数": ("高等代数", "高代"),
+    "数学分析": ("数学分析", "数分"),
+}
+ALGEBRA_SIGNALS = (
+    "多项式", "矩阵", "行列式", "线性空间", "子空间", "线性变换", "映射", "特征值",
+    "特征向量", "最小多项式", "相似", "合同", "二次型", "Jordan", "约尔当", "秩", "维数",
+    "核", "像空间", "互素", "整除", "不变因子",
+)
+
+
+def _topic_terms(topic: str) -> tuple[str, ...]:
+    return TOPIC_ALIASES.get(topic, (topic,))
+
+
+def _topic_chunk_score(content: str, topic: str) -> int:
+    terms = _topic_terms(topic)
+    topic_hits = sum(content.count(term) for term in terms)
+    if not topic_hits:
+        return 0
+    score = topic_hits * 30
+    score += sum(word in content for word in ("证明", "题目", "不会", "理解", "掌握", "复习", "继续", "总结", "基础")) * 4
+    if topic in {"高等代数", "高代"}:
+        score += sum(word in content for word in ALGEBRA_SIGNALS) * 5
+    return score
+
+
+def _focused_excerpt(content: str, topic: str, width: int = 360) -> str:
+    terms = _topic_terms(topic)
+    positions = [(match.start(), term) for term in terms for match in re.finditer(re.escape(term), content, re.I)]
+    if not positions:
+        return content[:width].replace("\n", " ").strip()
+    candidates: list[tuple[int, str]] = []
+    for position, matched_term in positions:
+        end = min(len(content), position + width)
+        for heading in SUBJECT_HEADINGS:
+            if heading in terms:
+                continue
+            next_heading = content.find(heading, position + len(matched_term) + 8, end)
+            if next_heading >= 0:
+                end = min(end, next_heading)
+        excerpt = content[max(0, position - 25):end].replace("\n", " ").strip()
+        signal = sum(word in excerpt for word in ("证明", "题目", "不会", "理解", "掌握", "复习", "继续", "总结", "卡", "基础"))
+        score = signal * 10 + sum(excerpt.count(term) for term in terms) * 4 + min(position, 200) // 50
+        if topic in {"高等代数", "高代"}:
+            score += sum(word in excerpt for word in ALGEBRA_SIGNALS) * 8
+        candidates.append((score, excerpt))
+    return max(candidates, key=lambda item: item[0])[1]
 
 
 class MemoryTools:
@@ -24,6 +79,41 @@ class MemoryTools:
         return [item.as_dict() for item in hybrid_search(
             self.conn, query, start_date, end_date, file_type, limit, self.semantic,
         )]
+
+    def trace_topic(self, topic: str, limit: int = 12) -> list[dict[str, Any]]:
+        """Return one strong, chronologically sampled memory per document for a topic."""
+        candidates = self.search_memory(topic, limit=max(60, limit * 6))
+        documents: dict[int, dict[str, Any]] = {}
+        for item in candidates:
+            previous = documents.get(item["document_id"])
+            if previous is None or item["score"] > previous["score"]:
+                documents[item["document_id"]] = dict(item)
+        memories: list[dict[str, Any]] = []
+        for document_id, item in documents.items():
+            chunks = self.conn.execute(
+                "SELECT id, content, source_kind FROM chunks WHERE document_id=?",
+                (document_id,),
+            ).fetchall()
+            if not chunks:
+                continue
+            best_chunk = max(chunks, key=lambda row: _topic_chunk_score(str(row["content"]), topic))
+            if _topic_chunk_score(str(best_chunk["content"]), topic) == 0:
+                item["snippet"] = f"文件标题记录：{item['title']}"
+                item["source_kind"] = "metadata"
+                memories.append(item)
+                continue
+            item["chunk_id"] = int(best_chunk["id"])
+            item["source_kind"] = str(best_chunk["source_kind"])
+            item["snippet"] = _focused_excerpt(str(best_chunk["content"]), topic)
+            memories.append(item)
+        personal = [item for item in memories if item["file_type"] in {"docx", "md", "txt"}]
+        if len(personal) >= 3:
+            memories = personal
+        memories.sort(key=lambda item: (item.get("event_date") or "9999-99-99", item["filename"]))
+        if len(memories) <= limit:
+            return memories
+        indexes = sorted({round(index * (len(memories) - 1) / (limit - 1)) for index in range(limit)})
+        return [memories[index] for index in indexes]
 
     def build_semantic_index(self, limit: int | None = None) -> dict[str, Any]:
         if self.semantic is None:

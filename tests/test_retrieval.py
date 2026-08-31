@@ -6,7 +6,7 @@ from second_brain.agent.tools import MemoryTools
 from second_brain.config import AppConfig, IngestionConfig, ModelConfig
 from second_brain.db import open_db
 from second_brain.ingestion.scanner import Scanner
-from second_brain.retrieval.lexical import extract_topic, search_memory
+from second_brain.retrieval.lexical import extract_topic, is_progress_query, search_memory
 from second_brain.retrieval.timeline import get_timeline
 
 
@@ -34,6 +34,8 @@ def make_brain(tmp_path: Path):
 
 def test_natural_question_extracts_topic():
     assert extract_topic("我以前什么时候复习过申论吗？") == "申论"
+    assert extract_topic("我的高等代数的学习路线是什么情况？") == "高等代数"
+    assert is_progress_query("我的高等代数学习到什么阶段？")
 
 
 def test_chinese_lexical_search_returns_evidence(tmp_path):
@@ -67,3 +69,9 @@ def test_structured_agent_tools_and_source_guard(tmp_path):
     assert tools.open_source(result["document_id"])["ok"] is True
     assert tools.status()["documents"]["ready"] == 2
 
+
+def test_trace_topic_returns_chronological_documents(tmp_path):
+    config, conn = make_brain(tmp_path)
+    tools = MemoryTools(config, conn)
+    results = tools.trace_topic("高等数学")
+    assert [item["event_date"] for item in results] == ["2026-08-22"]

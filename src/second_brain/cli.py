@@ -60,7 +60,12 @@ def cmd_ask(args) -> int:
     finally:
         agent.close()
     print(result.answer)
-    label = "LFM2.5-2.6B · OpenVINO 本地 Agent" if result.mode == "openvino" else "确定性证据检索"
+    labels = {
+        "openvino": "LFM2.5-2.6B · OpenVINO 本地 Agent",
+        "hybrid": "LFM Agent 规划 · 证据校验渲染",
+        "deterministic": "确定性证据检索",
+    }
+    label = labels.get(result.mode, labels["deterministic"])
     print(f"回答模式：{label}", file=sys.stderr)
     return 0
 

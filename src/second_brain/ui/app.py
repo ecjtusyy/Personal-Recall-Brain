@@ -150,7 +150,12 @@ with chat_tab:
                 active_agent = RecallAgent(config, tools, model=resident_lfm)
                 result = active_agent.answer(question)
             st.markdown(result.answer)
-            st.caption("回答模式：常驻 LFM2.5-2.6B · OpenVINO" if result.mode == "openvino" else "回答模式：确定性检索（模型未加载或回答校验未通过）")
+            mode_labels = {
+                "openvino": "回答模式：常驻 LFM2.5-2.6B · OpenVINO",
+                "hybrid": "回答模式：LFM Agent 规划 · 证据校验渲染",
+                "deterministic": "回答模式：确定性检索（模型未加载或回答校验未通过）",
+            }
+            st.caption(mode_labels.get(result.mode, mode_labels["deterministic"]))
             show_evidence(result.evidence, f"answer-{len(st.session_state.messages)}")
         st.session_state.messages.append({
             "role": "assistant", "content": result.answer, "evidence": result.evidence,

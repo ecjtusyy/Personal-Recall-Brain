@@ -7,19 +7,30 @@ from ..models import SearchResult
 
 
 QUESTION_NOISE = (
+    "我的", "学习路线", "学习路径", "学习进展", "学习进度", "学习情况", "掌握情况",
+    "是什么情况", "什么情况", "目前情况", "当前情况", "现在情况", "整体情况",
+    "进展如何", "进度如何", "学得怎么样", "学到哪里", "到什么阶段",
     "我以前", "我之前", "之前", "以前", "什么时候", "哪一天", "那天", "学了什么",
     "复习过", "学习过", "写过", "记录过", "在哪里", "在哪个", "哪份", "是否",
-    "有没有", "了吗", "吗", "请帮我", "帮我", "word", "Word", "文档", "文件",
+    "有没有", "了吗", "吗", "请帮我", "帮我", "word", "Word", "文档", "文件", "的",
+)
+PROGRESS_MARKERS = (
+    "路线", "路径", "进展", "进度", "情况", "阶段", "脉络", "轨迹", "总结", "梳理",
+    "学到哪里", "学得怎么样",
 )
 DATE_TEXT = re.compile(r"(?<!\d)(?:20\d{2}[年./_-])?\d{1,2}[月./_-]\d{1,2}日?(?!\d)")
 
 
 def extract_topic(query: str) -> str:
     text = DATE_TEXT.sub(" ", query)
-    for noise in QUESTION_NOISE:
+    for noise in sorted(QUESTION_NOISE, key=len, reverse=True):
         text = text.replace(noise, " ")
     text = re.sub(r"[^\w\u3400-\u9fff]+", " ", text, flags=re.UNICODE)
     return " ".join(text.split()).strip()
+
+
+def is_progress_query(query: str) -> bool:
+    return any(marker in query for marker in PROGRESS_MARKERS)
 
 
 def _snippet(content: str, query: str, width: int = 180) -> str:
@@ -104,4 +115,3 @@ def search_memory(
             if previous is None or result.score > previous.score:
                 found[result.chunk_id] = result
     return sorted(found.values(), key=lambda item: (-item.score, item.event_date or "9999"))[:limit]
-

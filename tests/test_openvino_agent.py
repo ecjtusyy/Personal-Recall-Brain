@@ -20,6 +20,10 @@ class FakeTools:
         self.calls.append(("get_timeline", start_date, end_date, topic))
         return self.search_memory(topic or "", start_date, end_date)
 
+    def trace_topic(self, topic, limit=12):
+        self.calls.append(("trace_topic", topic))
+        return self.search_memory(topic, limit=limit)
+
 
 class FakeModel:
     def __init__(self, responses, available=True):
@@ -61,6 +65,38 @@ def test_agent_plans_tool_and_synthesizes_grounded_answer(tmp_path):
     assert all("/no_think" not in prompt for prompt in model.prompts)
     assert "不要写日期、文件名、路径" in model.prompts[1]
     assert "可追溯来源" in answer.answer
+
+
+def test_agent_traces_topic_progress_instead_of_searching_whole_question(tmp_path):
+    model = FakeModel([
+        '{"tool":"search_memory","query":"高等代数学习路线"}',
+    ])
+    tools = FakeTools()
+    answer = RecallAgent(config(tmp_path), tools, model).answer("我的高等代数的学习路线是什么情况？")
+    assert answer.mode == "hybrid"
+    assert answer.plan == {"tool": "trace_topic", "topic": "高等代数"}
+    assert tools.calls[0] == ("trace_topic", "高等代数")
+    assert "总体判断" in answer.answer
+
+
+def test_repetitive_model_output_falls_back_to_structured_route(tmp_path):
+    model = FakeModel([
+        '{"tool":"trace_topic","topic":"高等代数"}',
+    ])
+    answer = RecallAgent(config(tmp_path), FakeTools(), model).answer("高等代数学习路线怎么样？")
+    assert answer.mode == "hybrid"
+    assert "总体判断" in answer.answer
+    assert "关键节点" in answer.answer
+    assert len(answer.answer) < 1200
+
+
+def test_off_topic_route_generation_is_rejected(tmp_path):
+    model = FakeModel([
+        '{"tool":"trace_topic","topic":"高等代数"}',
+    ])
+    answer = RecallAgent(config(tmp_path), FakeTools(), model).answer("高等代数进展如何？")
+    assert answer.mode == "hybrid"
+    assert "学习轨迹" in answer.answer
 
 
 def test_truncated_reasoning_forces_safe_fallback(tmp_path):
