@@ -1,0 +1,26 @@
+study_year = 2026
+data_dir = "data"
+model_dir = "models"
+device = "CPU"
+source_roots = [
+  'D:\本科期间学习\日记',
+  'D:\本科期间学习\考研',
+]
+
+[ingestion]
+extensions = [".docx", ".md", ".txt", ".pdf", ".png", ".jpg", ".jpeg", ".webp", ".wav", ".mp3", ".m4a", ".flac"]
+extract_docx_images = true
+enable_ocr = true
+enable_asr = true
+max_file_mb = 500
+
+[models]
+agent_id = "OpenVINO/Qwen3-1.7B-int4-ov"
+embedding_id = "OpenVINO/Qwen3-Embedding-0.6B-int4-cw-ov"
+asr_id = "OpenVINO/whisper-small-int8-ov"
+vision_id = "OpenVINO/Qwen3.5-4B-int8-ov"
+agent_enabled = true
+semantic_enabled = false
+vision_enabled = false
+max_new_tokens = 512
+
