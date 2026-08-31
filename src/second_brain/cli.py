@@ -60,7 +60,7 @@ def cmd_ask(args) -> int:
     finally:
         agent.close()
     print(result.answer)
-    label = "OpenVINO 本地 Agent" if result.mode == "openvino" else "确定性证据检索"
+    label = "LFM2.5-2.6B · OpenVINO 本地 Agent" if result.mode == "openvino" else "确定性证据检索"
     print(f"回答模式：{label}", file=sys.stderr)
     return 0
 
@@ -101,7 +101,7 @@ def build_parser() -> argparse.ArgumentParser:
     ask.set_defaults(func=cmd_ask)
     status = sub.add_parser("status", help="查看索引状态")
     status.set_defaults(func=cmd_status)
-    models = sub.add_parser("download-models", help="下载 Intel OpenVINO 官方优化模型")
+    models = sub.add_parser("download-models", help="下载或转换 Intel OpenVINO 模型")
     models.add_argument("--profile", choices=("core", "audio", "semantic", "vision", "all"), default="core")
     models.set_defaults(func=cmd_models)
     return parser

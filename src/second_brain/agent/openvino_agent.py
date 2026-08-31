@@ -9,6 +9,7 @@ from typing import Any
 from ..config import AppConfig
 from ..dates import parse_date_query
 from ..retrieval.lexical import extract_topic
+from .lfm_adapter import OpenVINOLFMModel
 from .tools import MemoryTools
 
 
@@ -24,37 +25,6 @@ class AgentAnswer:
     mode: str
 
 
-class OpenVINOTextModel:
-    def __init__(self, model_path: Path, device: str = "CPU", max_new_tokens: int = 512) -> None:
-        self.model_path = model_path
-        self.device = device
-        self.max_new_tokens = max_new_tokens
-        self._pipeline = None
-
-    @property
-    def available(self) -> bool:
-        return (self.model_path / "openvino_model.xml").exists()
-
-    def _load(self):
-        if self._pipeline is None:
-            import openvino_genai as ov_genai
-
-            self._pipeline = ov_genai.LLMPipeline(str(self.model_path), self.device)
-        return self._pipeline
-
-    def generate(self, prompt: str, max_new_tokens: int | None = None) -> str:
-        result = self._load().generate(
-            prompt,
-            max_new_tokens=max_new_tokens or self.max_new_tokens,
-            do_sample=False,
-        )
-        text = str(result).strip()
-        return re.sub(r"<think>.*?</think>", "", text, flags=re.S).strip()
-
-    def unload(self) -> None:
-        self._pipeline = None
-
-
 def _json_object(text: str) -> dict[str, Any] | None:
     match = re.search(r"\{.*?\}", text, re.S)
     if not match:
@@ -67,11 +37,22 @@ def _json_object(text: str) -> dict[str, Any] | None:
 
 
 class RecallAgent:
-    def __init__(self, config: AppConfig, tools: MemoryTools, model: OpenVINOTextModel | None = None) -> None:
+    def __init__(self, config: AppConfig, tools: MemoryTools, model: OpenVINOLFMModel | None = None) -> None:
         self.config = config
         self.tools = tools
-        model_path = config.model_dir / config.models.agent_id.split("/")[-1]
-        self.model = model or OpenVINOTextModel(model_path, config.device, config.models.max_new_tokens)
+        self.model = model or OpenVINOLFMModel(
+            config.agent_model_path, config.device, config.models.max_new_tokens,
+        )
+
+    @property
+    def resident(self) -> bool:
+        return bool(getattr(self.model, "loaded", False))
+
+    def warmup(self) -> bool:
+        if not self.config.models.agent_enabled or not self.model.available:
+            return False
+        self.model.warmup()
+        return True
 
     def _fallback_plan(self, question: str) -> dict[str, Any]:
         start, end = parse_date_query(question, self.config.study_year)
@@ -91,7 +72,7 @@ search_memory 参数：query,start_date,end_date,file_type。
 get_timeline 参数：start_date,end_date,topic。
 当前学习年份：{self.config.study_year}
 问题：{question}
-不要展开思考，只做工具选择。/no_think
+不要展开思考，只做工具选择。
 JSON："""
         try:
             candidate = _json_object(self.model.generate(prompt, 180))
@@ -165,7 +146,7 @@ JSON："""
 只输出一段不超过 100 字的中文结论；不要写日期、文件名、路径、编号或来源，因为程序会附加经过校验的时间和来源。
 用户问题：{question}
 证据 JSON：{json.dumps(compact, ensure_ascii=False)}
-不要展示思考过程，只输出简洁答案。/no_think
+不要展示思考过程，只输出简洁答案。
 回答："""
         try:
             generated = self.model.generate(prompt, min(self.config.models.max_new_tokens, 160))

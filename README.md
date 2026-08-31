@@ -10,7 +10,7 @@
 - SHA-256 增量扫描：未变化的文件不重复解析，单个坏文件不影响整批。
 - SQLite + FTS5 中文全文检索、时间轴、日期来源与置信度。
 - 可选 OpenVINO 中文语义检索。
-- OpenVINO 本地 Agent 规划工具调用并整理答案；模型不可用时确定性检索仍可用。
+- 常驻的 LFM2.5-2.6B 通过 OpenVINO 规划工具调用并整理答案；模型不可用时确定性检索仍可用。
 - Qwen 视觉模型按需加载、分析结果缓存；不会和主 Agent 长期同时占用内存。
 - Streamlit 中文界面：聊天、精确搜索、时间轴、索引状态、一键打开原文件。
 
@@ -20,24 +20,24 @@
 
 | 能力 | 默认模型 | 加载策略 |
 |---|---|---|
-| 智能问答 | `OpenVINO/Qwen3-1.7B-int4-ov` | 核心模型，回答结束可卸载 |
+| 智能问答 | `LiquidAI/LFM2.5-2.6B` → OpenVINO INT4 | 核心 Agent，界面启动后常驻并跨提问复用 |
 | 中文 OCR | RapidOCR PP-OCR + OpenVINO backend | 正文扫描后分批加载、逐图保存 |
 | 音频转写 | `OpenVINO/whisper-small-int8-ov` | 仅有音频且模型已下载时加载 |
 | 语义检索 | `OpenVINO/Qwen3-Embedding-0.6B-int4-cw-ov` | 默认关闭，可选开启 |
 | 复杂图片 | `OpenVINO/Qwen3.5-4B-int8-ov` | 默认关闭，只按需加载并缓存结果 |
 
-所有大模型默认从 Intel/OpenVINO 在 Hugging Face 的官方优化仓库下载，直接以 OpenVINO IR 运行。
+核心 Agent 使用 LiquidAI 官方权重，由 Optimum Intel 在本机转换为 INT4 OpenVINO IR，再由 OpenVINO GenAI 在 CPU 上运行。其他模型优先使用 OpenVINO 官方优化仓库。
 
 ## 一键使用
 
-1. 双击 `安装与下载模型.bat`。首次安装会准备独立环境并下载约 1.2GB 的核心 INT4 模型。
+1. 双击 `安装与下载模型.bat`。首次安装会准备独立环境、下载约 5.4GB 的 LiquidAI 原始权重，再在本机生成约 2GB 的 OpenVINO INT4 模型；请预留至少 10GB 空间和较长转换时间。
 2. 检查 `config.toml` 中的资料目录。默认已经配置：
 
    - `D:\本科期间学习\日记`
    - `D:\本科期间学习\考研`
 
 3. 双击 `启动第二大脑.bat`。
-4. 浏览器打开后先点左侧“立即扫描资料”，正文扫描完成后即可提问。
+4. 浏览器打开后会自动加载并常驻 LFM2.5-2.6B；状态显示“已常驻内存”后即可提问。
 5. 需要检索图片里的文字时，点“补充下一批图片文字”，或双击 `补充图片文字.bat`。每张图片完成后都会保存，中断后下次从未完成处继续。
 
 也可以先双击 `扫描学习资料.bat` 做离线扫描。

@@ -34,6 +34,7 @@ def agent_runtime(config_path: str):
 CONFIG_PATH = os.environ.get("SECOND_BRAIN_CONFIG", "config.toml")
 config, conn = runtime(str(Path(CONFIG_PATH).resolve()))
 tools = MemoryTools(config, conn)
+resident_agent = None
 
 
 def open_document(document_id: int) -> None:
@@ -77,7 +78,6 @@ with st.sidebar:
         stats = Scanner(config, conn, progress=progress.write).scan()
         progress.update(label=f"扫描完成：更新 {stats.files_changed}，跳过 {stats.files_skipped}，失败 {stats.files_failed}",
                         state="complete" if not stats.files_failed else "error")
-        st.cache_resource.clear()
         st.rerun()
     images = status.get("images") or {}
     pending_images = images.get("pending") or 0
@@ -90,13 +90,13 @@ with st.sidebar:
                 label=f"本批完成 {result.completed} 张，识别到文字 {result.with_text} 张，失败 {result.failed} 张",
                 state="complete" if not result.failed else "error",
             )
-            st.cache_resource.clear()
             st.rerun()
     st.divider()
-    agent_path = config.model_dir / config.models.agent_id.split("/")[-1] / "openvino_model.xml"
-    st.write("智能问答模型", "✅ 已就绪" if agent_path.exists() else "⬇️ 尚未下载")
+    agent_path = config.agent_model_path / "openvino_model.xml"
+    st.write("核心 Agent", "LFM2.5-2.6B · OpenVINO INT4")
+    st.write("模型文件", "✅ 已就绪" if agent_path.exists() else "⬇️ 尚未下载")
     if not agent_path.exists() and st.button("下载核心 OpenVINO 模型", use_container_width=True):
-        with st.status("正在下载约 1.2GB 的 INT4 模型…", expanded=True) as model_status:
+        with st.status("正在下载 LiquidAI 权重并转换为 OpenVINO INT4；首次耗时较长…", expanded=True) as model_status:
             try:
                 for model_path in download_models(config.config_path, "core"):
                     st.write(model_path)
@@ -104,6 +104,15 @@ with st.sidebar:
                 st.rerun()
             except Exception as exc:
                 model_status.update(label=f"下载失败：{exc}", state="error")
+    if agent_path.exists():
+        with st.status("正在加载常驻 LFM Agent…", expanded=False) as resident_status:
+            try:
+                resident_agent = agent_runtime(str(Path(CONFIG_PATH).resolve()))
+                resident_agent.warmup()
+                resident_status.update(label="LFM2.5-2.6B 已常驻内存", state="complete")
+            except Exception as exc:
+                resident_status.update(label=f"LFM 常驻加载失败：{exc}", state="error")
+                resident_agent = None
     st.caption("模型只写入项目 models 目录；不会写入学习资料目录。")
 
 st.title("Personal Recall Brain")
@@ -125,9 +134,10 @@ with chat_tab:
             st.write(question)
         with st.chat_message("assistant"):
             with st.spinner("正在检索本地证据…"):
-                result = agent_runtime(str(Path(CONFIG_PATH).resolve())).answer(question)
+                active_agent = resident_agent or agent_runtime(str(Path(CONFIG_PATH).resolve()))
+                result = active_agent.answer(question)
             st.markdown(result.answer)
-            st.caption("回答模式：OpenVINO 本地 Agent" if result.mode == "openvino" else "回答模式：确定性检索（模型未加载或回答校验未通过）")
+            st.caption("回答模式：常驻 LFM2.5-2.6B · OpenVINO" if result.mode == "openvino" else "回答模式：确定性检索（模型未加载或回答校验未通过）")
             show_evidence(result.evidence, f"answer-{len(st.session_state.messages)}")
         st.session_state.messages.append({
             "role": "assistant", "content": result.answer, "evidence": result.evidence,

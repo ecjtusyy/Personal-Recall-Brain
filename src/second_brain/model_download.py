@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 from huggingface_hub import snapshot_download
@@ -19,12 +22,55 @@ def profile_models(config, profile: str) -> list[str]:
     return mapping[profile]
 
 
+def _export_lfm_agent(config, runner=None, optimum_cli: Path | None = None) -> Path:
+    target = config.agent_model_path
+    if (target / "openvino_model.xml").exists():
+        return target
+    optimum_cli = optimum_cli or Path(sys.executable).with_name(
+        "optimum-cli.exe" if sys.platform == "win32" else "optimum-cli"
+    )
+    if not optimum_cli.exists():
+        raise RuntimeError("缺少模型转换组件，请重新运行“安装与下载模型.bat”")
+    if target.exists():
+        resolved_target = target.resolve(strict=False)
+        model_root = config.model_dir.resolve(strict=False)
+        if model_root not in resolved_target.parents:
+            raise RuntimeError("拒绝清理项目模型目录之外的不完整模型")
+        shutil.rmtree(target)
+    partial = target.with_name(f"{target.name}.converting")
+    if partial.exists():
+        resolved = partial.resolve(strict=False)
+        model_root = config.model_dir.resolve(strict=False)
+        if model_root not in resolved.parents:
+            raise RuntimeError("拒绝清理项目模型目录之外的转换缓存")
+        shutil.rmtree(partial)
+    command = [
+        str(optimum_cli), "export", "openvino",
+        "--model", config.models.agent_id,
+        "--trust-remote-code",
+        "--weight-format", "int4",
+        "--sym",
+        "--group-size", "128",
+        "--backup-precision", "int8_sym",
+        "--cache_dir", str(config.model_dir / ".hf-cache"),
+        str(partial),
+    ]
+    (runner or subprocess.run)(command, check=True)
+    if not (partial / "openvino_model.xml").exists():
+        raise RuntimeError("LFM 转换结束但未生成 openvino_model.xml")
+    partial.replace(target)
+    return target
+
+
 def download_models(config_path: str | Path, profile: str = "core") -> list[Path]:
     config = load_config(config_path)
     downloaded: list[Path] = []
     for model_id in profile_models(config, profile):
-        target = config.model_dir / model_id.split("/")[-1]
-        snapshot_download(repo_id=model_id, local_dir=target)
+        if model_id == config.models.agent_id and not model_id.startswith("OpenVINO/"):
+            target = _export_lfm_agent(config)
+        else:
+            target = config.model_dir / model_id.split("/")[-1]
+            snapshot_download(repo_id=model_id, local_dir=target)
         downloaded.append(target)
     return downloaded
 

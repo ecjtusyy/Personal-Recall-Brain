@@ -10,6 +10,8 @@ DEFAULT_EXTENSIONS = (
     ".docx", ".md", ".txt", ".pdf", ".png", ".jpg", ".jpeg", ".webp",
     ".wav", ".mp3", ".m4a", ".flac",
 )
+DEFAULT_AGENT_ID = "LiquidAI/LFM2.5-2.6B"
+DEFAULT_AGENT_LOCAL_DIR = "LFM2.5-2.6B-int4-ov"
 
 
 @dataclass(frozen=True)
@@ -23,7 +25,8 @@ class IngestionConfig:
 
 @dataclass(frozen=True)
 class ModelConfig:
-    agent_id: str = "OpenVINO/Qwen3-1.7B-int4-ov"
+    agent_id: str = DEFAULT_AGENT_ID
+    agent_local_dir: str = DEFAULT_AGENT_LOCAL_DIR
     embedding_id: str = "OpenVINO/Qwen3-Embedding-0.6B-int4-cw-ov"
     asr_id: str = "OpenVINO/whisper-small-int8-ov"
     vision_id: str = "OpenVINO/Qwen3.5-4B-int8-ov"
@@ -52,6 +55,10 @@ class AppConfig:
     def assets_dir(self) -> Path:
         return self.data_dir / "extracted_assets"
 
+    @property
+    def agent_model_path(self) -> Path:
+        return self.model_dir / self.models.agent_local_dir
+
     def ensure_runtime_dirs(self) -> None:
         source_resolved = {root.resolve(strict=False) for root in self.source_roots}
         for runtime_dir in (self.data_dir, self.model_dir, self.assets_dir):
@@ -77,6 +84,8 @@ def load_config(path: str | Path = "config.toml") -> AppConfig:
     base = config_path.parent
     ingestion_raw = raw.get("ingestion", {})
     models_raw = raw.get("models", {})
+    agent_id = str(models_raw.get("agent_id", DEFAULT_AGENT_ID))
+    default_agent_dir = DEFAULT_AGENT_LOCAL_DIR if agent_id == DEFAULT_AGENT_ID else agent_id.split("/")[-1]
     config = AppConfig(
         config_path=config_path,
         study_year=int(raw.get("study_year", 2026)),
@@ -92,7 +101,8 @@ def load_config(path: str | Path = "config.toml") -> AppConfig:
             max_file_mb=int(ingestion_raw.get("max_file_mb", 500)),
         ),
         models=ModelConfig(
-            agent_id=str(models_raw.get("agent_id", ModelConfig.agent_id)),
+            agent_id=agent_id,
+            agent_local_dir=str(models_raw.get("agent_local_dir", default_agent_dir)),
             embedding_id=str(models_raw.get("embedding_id", ModelConfig.embedding_id)),
             asr_id=str(models_raw.get("asr_id", ModelConfig.asr_id)),
             vision_id=str(models_raw.get("vision_id", ModelConfig.vision_id)),

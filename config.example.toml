@@ -15,7 +15,8 @@ enable_asr = true
 max_file_mb = 500
 
 [models]
-agent_id = "OpenVINO/Qwen3-1.7B-int4-ov"
+agent_id = "LiquidAI/LFM2.5-2.6B"
+agent_local_dir = "LFM2.5-2.6B-int4-ov"
 embedding_id = "OpenVINO/Qwen3-Embedding-0.6B-int4-cw-ov"
 asr_id = "OpenVINO/whisper-small-int8-ov"
 vision_id = "OpenVINO/Qwen3.5-4B-int8-ov"
