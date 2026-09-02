@@ -27,6 +27,7 @@ semantic_enabled = false
 deep_enabled = false
 vision_enabled = false
 max_new_tokens = 512
+deep_max_new_tokens = 256
 fast_context_tokens = 4096
 deep_context_tokens = 8192
 evidence_limit = 8

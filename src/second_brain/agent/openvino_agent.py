@@ -360,7 +360,7 @@ JSON："""
 回答："""
             try:
                 generated = self.model.analyze_deep(
-                    prompt, max_new_tokens=min(self.config.models.max_new_tokens, 256),
+                    prompt, max_new_tokens=self.config.models.deep_max_new_tokens,
                 )
             except Exception as exc:
                 plan["deep_fallback_reason"] = f"reasoner_error:{type(exc).__name__}"
@@ -389,7 +389,9 @@ JSON："""
                 plan["deep_fallback_reason"] = "answer_validation_failed"
                 return None
         source_lines = [
-            f"- [E{index}] {item.get('event_date') or '日期不确定'}｜{item['filename']}\n  {item['path']}"
+            f"- [E{index}] 日期：{item.get('event_date') or '日期不确定'}\n"
+            f"  文件：{item['filename']}\n"
+            f"  路径：{item['path']}"
             for index, item in enumerate(ordered, 1)
         ]
         grounded = f"{generated.rstrip()}\n\n可追溯来源：\n" + "\n".join(source_lines)

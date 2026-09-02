@@ -230,3 +230,26 @@ def test_deep_recall_sanitizes_unverified_dates(tmp_path):
     assert answer.mode == "deep"
     assert "2026-09-99" not in answer.answer
     assert "日期不确定" in answer.answer
+
+
+def test_deep_sources_with_filename_without_spaces_pass_grounding(tmp_path):
+    tools = FakeTools()
+    original = tools.search_memory
+
+    def no_space_results(*args, **kwargs):
+        results = original(*args, **kwargs)
+        results[0]["filename"] = "8.21申论.docx"
+        results[0]["path"] = r"D:\资料\8.21申论.docx"
+        return results
+
+    tools.search_memory = no_space_results
+    model = FakeDeepModel(['{"tool":"trace_topic","topic":"高等代数"}'])
+    cfg = config(tmp_path)
+    cfg = AppConfig(
+        config_path=cfg.config_path, study_year=cfg.study_year, data_dir=cfg.data_dir,
+        model_dir=cfg.model_dir, device=cfg.device, source_roots=cfg.source_roots,
+        ingestion=cfg.ingestion, models=ModelConfig(agent_enabled=True, deep_enabled=True),
+    )
+    answer = RecallAgent(cfg, tools, model).answer("深度分析高等代数", recall_mode="deep")
+    assert answer.mode == "deep"
+    assert "文件：8.21申论.docx" in answer.answer

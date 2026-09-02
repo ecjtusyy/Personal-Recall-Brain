@@ -39,6 +39,7 @@ class ModelConfig:
     deep_enabled: bool = False
     vision_enabled: bool = False
     max_new_tokens: int = 512
+    deep_max_new_tokens: int = 256
     fast_context_tokens: int = 4096
     deep_context_tokens: int = 8192
     evidence_limit: int = 8
@@ -128,6 +129,7 @@ def load_config(path: str | Path = "config.toml") -> AppConfig:
             deep_enabled=bool(models_raw.get("deep_enabled", models_raw.get("vision_enabled", False))),
             vision_enabled=bool(models_raw.get("vision_enabled", False)),
             max_new_tokens=int(models_raw.get("max_new_tokens", 512)),
+            deep_max_new_tokens=int(models_raw.get("deep_max_new_tokens", 256)),
             fast_context_tokens=int(models_raw.get("fast_context_tokens", 4096)),
             deep_context_tokens=int(models_raw.get("deep_context_tokens", 8192)),
             evidence_limit=int(models_raw.get("evidence_limit", 8)),

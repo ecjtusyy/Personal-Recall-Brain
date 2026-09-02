@@ -63,3 +63,23 @@ def test_consolidation_is_rebuildable_without_changing_source_memory(tmp_path):
     assert conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0] == before
     assert conn.execute("SELECT COUNT(*) FROM concepts WHERE name='极限'").fetchone()[0] == 1
     conn.close()
+
+
+def test_concepts_ignore_repeated_title_and_ambiguous_everyday_words(tmp_path):
+    conn = open_db(tmp_path / "brain.db")
+    document_id, _chunk_id = _document(conn, "高等代数.docx", "2026-08-30", "今天讨论商业合作，要写好合同。")
+    conn.execute("UPDATE documents SET title='高等代数 矩阵' WHERE id=?", (document_id,))
+    conn.commit()
+    consolidate_memory(conn)
+    assert conn.execute("SELECT COUNT(*) FROM concepts WHERE name='矩阵'").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM concepts WHERE name='合同'").fetchone()[0] == 0
+
+    conn.execute(
+        "UPDATE chunks SET content='研究二次型对应矩阵的合同变换' WHERE document_id=?",
+        (document_id,),
+    )
+    conn.commit()
+    consolidate_memory(conn)
+    assert conn.execute("SELECT COUNT(*) FROM concepts WHERE name='矩阵'").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM concepts WHERE name='合同'").fetchone()[0] == 1
+    conn.close()

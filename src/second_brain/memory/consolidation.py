@@ -46,6 +46,10 @@ SUBJECT_CONCEPTS: dict[str, tuple[str, ...]] = {
 _BLOCKED = ("不会", "不懂", "没懂", "卡住", "卡在", "没思路", "困难", "薄弱", "错误", "做错", "忘了")
 _PROGRESS = ("理解", "明白", "掌握", "串起来", "会做", "解决", "总结", "复习", "回顾")
 _MASTERED = ("完全掌握", "熟练掌握", "已经掌握", "可以独立", "融会贯通")
+_AMBIGUOUS_CONTEXT: dict[str, tuple[str, ...]] = {
+    "合同": ("矩阵", "二次型", "正定", "标准形", "线性代数", "高等代数"),
+    "相似": ("矩阵", "线性变换", "特征值", "对角化", "高等代数"),
+}
 
 
 @dataclass(frozen=True)
@@ -82,6 +86,11 @@ def detect_concepts(text: str) -> list[tuple[str, str]]:
     found: list[tuple[str, str]] = []
     for subject, concepts in SUBJECT_CONCEPTS.items():
         for concept in concepts:
+            if concept.casefold() not in folded:
+                continue
+            context = _AMBIGUOUS_CONTEXT.get(concept)
+            if context and not any(word.casefold() in folded for word in context):
+                continue
             if concept.casefold() in folded:
                 found.append((subject, concept))
     return found
@@ -154,7 +163,10 @@ def consolidate_memory(conn: sqlite3.Connection) -> ConsolidationStats:
         episode["activity_text"].append(text[:300])
         if row["chunk_id"] is None:
             continue
-        for subject, concept in detect_concepts(text):
+        # Titles help classify an episode, but concepts must be grounded in the
+        # chunk itself. Otherwise a long Word title gets repeated into every
+        # unrelated paragraph and pollutes concept state.
+        for subject, concept in detect_concepts(str(row["content"] or "")):
             concept_hits[(subject, concept)].append(
                 {"chunk_id": int(row["chunk_id"]), "date": event_date, "text": _compact(row["content"] or text, 260)}
             )

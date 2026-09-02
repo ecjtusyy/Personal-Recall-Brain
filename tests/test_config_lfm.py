@@ -24,4 +24,5 @@ def test_default_config_uses_lfm_as_local_agent(tmp_path):
     assert config.models.reasoner_id == "OpenVINO/Qwen3.5-4B-int4-ov"
     assert config.models.fast_context_tokens == 4096
     assert config.models.deep_context_tokens == 8192
+    assert config.models.deep_max_new_tokens == 256
     assert config.models.controller_device == "CPU"
