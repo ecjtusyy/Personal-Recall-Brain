@@ -20,6 +20,13 @@ class FakeEmbedder:
         return np.asarray(vectors, dtype=np.float32)
 
 
+def test_embedding_model_id_versions_the_sampling_strategy(tmp_path):
+    from second_brain.retrieval.semantic import OpenVINOEmbedder
+
+    embedder = OpenVINOEmbedder(tmp_path / "embedding-model")
+    assert embedder.model_id.endswith(":sample256:v1")
+
+
 def test_semantic_paraphrase_recall_and_optional_absence(tmp_path):
     conn = open_db(tmp_path / "brain.db")
     document_id = conn.execute(
@@ -33,4 +40,3 @@ def test_semantic_paraphrase_recall_and_optional_absence(tmp_path):
     index = SemanticIndex(conn, FakeEmbedder())
     assert index.index_missing() == 1
     assert index.search("函数序列如何趋于同一极限")[0].filename == "数学.docx"
-

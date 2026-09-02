@@ -15,7 +15,7 @@ class OpenVINOEmbedder:
     def __init__(self, model_path: Path, device: str = "CPU") -> None:
         self.model_path = model_path
         self.device = device
-        self.model_id = model_path.name
+        self.model_id = f"{model_path.name}:sample256:v1"
         self._tokenizer = None
         self._model = None
 
@@ -26,6 +26,9 @@ class OpenVINOEmbedder:
     def _load(self) -> None:
         if self._model is not None:
             return
+        # Importing the package registers the custom tokenizer graph operations
+        # (for example SpecialTokensSplit) with the OpenVINO runtime.
+        import openvino_tokenizers  # noqa: F401
         import openvino as ov
 
         core = ov.Core()
@@ -81,9 +84,20 @@ class SemanticIndex:
             params.append(limit)
         rows = self.conn.execute(sql, params).fetchall()
         count = 0
-        for offset in range(0, len(rows), 8):
-            batch = rows[offset : offset + 8]
-            vectors = self.embedder.embed([row["content"] for row in batch])
+        # Retrieval vectors only need a representative view of a chunk. Sampling
+        # the beginning, middle and end avoids 900-token padding and makes the
+        # one-time CPU build practical on low-memory machines.
+        def sample(text: str) -> str:
+            text = " ".join(text.split())
+            if len(text) <= 256:
+                return text
+            middle = max(128, len(text) // 2 - 32)
+            return f"{text[:128]} {text[middle:middle + 64]} {text[-64:]}"
+
+        batch_size = 16
+        for offset in range(0, len(rows), batch_size):
+            batch = rows[offset : offset + batch_size]
+            vectors = self.embedder.embed([sample(row["content"]) for row in batch])
             for row, vector in zip(batch, vectors, strict=True):
                 self.conn.execute(
                     """
@@ -125,4 +139,3 @@ class SemanticIndex:
                 source_kind=row["source_kind"],
             ))
         return sorted(scored, key=lambda item: item.score, reverse=True)[:limit]
-

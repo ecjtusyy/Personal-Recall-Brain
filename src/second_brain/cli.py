@@ -12,6 +12,7 @@ from .db import open_db
 from .ingestion.enrichment import ImageEnricher
 from .ingestion.scanner import Scanner
 from .model_download import download_models
+from .memory.consolidation import consolidate_memory
 
 
 def _runtime(config_path: str):
@@ -76,6 +77,20 @@ def cmd_status(args) -> int:
     return 0
 
 
+def cmd_consolidate(args) -> int:
+    _config, conn = _runtime(args.config)
+    stats = consolidate_memory(conn)
+    print(json.dumps(stats.__dict__, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_semantic_index(args) -> int:
+    config, conn = _runtime(args.config)
+    result = MemoryTools(config, conn).build_semantic_index(args.limit)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0 if result.get("ok") else 2
+
+
 def cmd_models(args) -> int:
     for path in download_models(args.config, args.profile):
         print(f"已准备 OpenVINO 模型：{path}")
@@ -106,8 +121,13 @@ def build_parser() -> argparse.ArgumentParser:
     ask.set_defaults(func=cmd_ask)
     status = sub.add_parser("status", help="查看索引状态")
     status.set_defaults(func=cmd_status)
+    consolidate = sub.add_parser("consolidate", help="从原始索引重建情节、概念和学习状态")
+    consolidate.set_defaults(func=cmd_consolidate)
+    semantic = sub.add_parser("build-semantic-index", help="补齐 OpenVINO 本地语义向量索引")
+    semantic.add_argument("--limit", type=int, default=None, help="本次最多处理的知识块数")
+    semantic.set_defaults(func=cmd_semantic_index)
     models = sub.add_parser("download-models", help="下载或转换 Intel OpenVINO 模型")
-    models.add_argument("--profile", choices=("core", "audio", "semantic", "vision", "all"), default="core")
+    models.add_argument("--profile", choices=("core", "audio", "semantic", "deep", "vision", "all"), default="core")
     models.set_defaults(func=cmd_models)
     return parser
 

@@ -19,6 +19,7 @@ dependencies = [
   "rapidocr>=3.8,<4",
   "openvino>=2025.1,<2027",
   "openvino-genai>=2025.1,<2027",
+  "openvino-tokenizers>=2025.1,<2027",
   "huggingface-hub>=0.30,<2",
   "av>=13,<17",
 ]

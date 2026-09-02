@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import sqlite3
 from datetime import datetime, timezone
@@ -72,13 +73,23 @@ class MemoryTools:
         self.config = config
         self.conn = conn
         embedding_path = config.model_dir / config.models.embedding_id.split("/")[-1]
-        self.semantic = SemanticIndex(conn, OpenVINOEmbedder(embedding_path, config.device)) if config.models.semantic_enabled else None
+        self.semantic = SemanticIndex(
+            conn, OpenVINOEmbedder(embedding_path, config.models.embedding_device)
+        ) if config.models.semantic_enabled else None
 
     def search_memory(self, query: str, start_date: str | None = None, end_date: str | None = None,
                       file_type: str | None = None, limit: int = 12) -> list[dict[str, Any]]:
         return [item.as_dict() for item in hybrid_search(
             self.conn, query, start_date, end_date, file_type, limit, self.semantic,
         )]
+
+    def search_semantic(self, query: str, limit: int = 12) -> list[dict[str, Any]]:
+        if self.semantic is None or not self.semantic.available:
+            return []
+        return [item.as_dict() for item in self.semantic.search(query, limit)]
+
+    def search_topic(self, topic: str, limit: int = 12) -> list[dict[str, Any]]:
+        return self.trace_topic(topic, limit)
 
     def trace_topic(self, topic: str, limit: int = 12) -> list[dict[str, Any]]:
         """Return one strong, chronologically sampled memory per document for a topic."""
@@ -146,6 +157,112 @@ class MemoryTools:
         ).fetchone()
         return dict(row) if row else None
 
+    def get_episode(self, event_date: str) -> dict[str, Any] | None:
+        row = self.conn.execute("SELECT * FROM episodes WHERE event_date=?", (event_date,)).fetchone()
+        if not row:
+            return None
+        result = dict(row)
+        result["subjects"] = json.loads(result.pop("subjects_json"))
+        result["source_document_ids"] = json.loads(result.pop("source_document_ids_json"))
+        result["sources"] = [
+            dict(item) for item in self.conn.execute(
+                f"SELECT id, filename, path, event_date FROM documents WHERE id IN ({','.join('?' for _ in result['source_document_ids'])})",
+                result["source_document_ids"],
+            ).fetchall()
+        ] if result["source_document_ids"] else []
+        return result
+
+    def get_concept_state(self, query: str, limit: int = 12) -> list[dict[str, Any]]:
+        pattern = f"%{query.strip()}%"
+        rows = self.conn.execute(
+            """
+            SELECT c.id, c.name, c.subject, c.first_seen, c.last_seen, c.exposure_count,
+                   s.state, s.current_summary, s.remaining_problem, s.confidence, s.updated_at
+            FROM concepts c JOIN concept_states s ON s.concept_id=c.id
+            WHERE c.name LIKE ? OR c.subject LIKE ?
+            ORDER BY CASE WHEN c.name=? OR c.subject=? THEN 0 ELSE 1 END,
+                     c.exposure_count DESC, c.last_seen DESC
+            LIMIT ?
+            """,
+            (pattern, pattern, query, query, limit),
+        ).fetchall()
+        results: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item["evidence"] = [
+                dict(evidence) for evidence in self.conn.execute(
+                    """
+                    SELECT ce.chunk_id, ce.event_date, c.content AS snippet,
+                           d.id AS document_id, d.filename, d.path, d.file_type,
+                           d.date_source, c.source_kind
+                    FROM concept_evidence ce
+                    JOIN chunks c ON c.id=ce.chunk_id
+                    JOIN documents d ON d.id=c.document_id
+                    WHERE ce.concept_id=?
+                    ORDER BY ce.event_date DESC, ce.chunk_id DESC LIMIT 4
+                    """,
+                    (row["id"],),
+                ).fetchall()
+            ]
+            results.append(item)
+        return results
+
+    def get_topic_profile(self, topic: str) -> dict[str, Any]:
+        states = self.get_concept_state(topic, 20)
+        episodes = [
+            self.get_episode(row["event_date"]) for row in self.conn.execute(
+                """
+                SELECT event_date FROM episodes
+                WHERE subjects_json LIKE ? OR summary LIKE ?
+                ORDER BY event_date LIMIT 40
+                """,
+                (f"%{topic}%", f"%{topic}%"),
+            ).fetchall()
+        ]
+        return {
+            "topic": topic,
+            "concept_states": states,
+            "episodes": [episode for episode in episodes if episode],
+        }
+
+    @staticmethod
+    def analysis_key(question: str, evidence_ids: list[int], model_id: str) -> str:
+        payload = json.dumps(
+            {"question": question.strip(), "evidence_ids": sorted(evidence_ids), "model_id": model_id},
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    def get_cached_analysis(self, question: str, evidence_ids: list[int], model_id: str) -> str | None:
+        key = self.analysis_key(question, evidence_ids, model_id)
+        row = self.conn.execute("SELECT answer FROM analysis_cache WHERE request_hash=?", (key,)).fetchone()
+        return str(row["answer"]) if row else None
+
+    def cache_analysis(
+        self,
+        question: str,
+        intent: str,
+        subject: str | None,
+        answer: str,
+        evidence_ids: list[int],
+        model_id: str,
+    ) -> None:
+        key = self.analysis_key(question, evidence_ids, model_id)
+        self.conn.execute(
+            """
+            INSERT INTO analysis_cache(request_hash, question, intent, subject, answer,
+                                       evidence_ids_json, model_id, created_at)
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(request_hash) DO UPDATE SET answer=excluded.answer, created_at=excluded.created_at
+            """,
+            (
+                key, question, intent, subject, answer, json.dumps(evidence_ids),
+                model_id, datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        self.conn.commit()
+
     def get_timeline(self, start_date: str, end_date: str | None = None,
                      topic: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
         return [item.as_dict() for item in timeline_query(self.conn, start_date, end_date, topic, limit)]
@@ -174,8 +291,8 @@ class MemoryTools:
             return {"ok": False, "error": "图片路径不在允许范围"}
         from .qwen_vision_adapter import OpenVINOVisionEngine
 
-        model_path = self.config.model_dir / self.config.models.vision_id.split("/")[-1]
-        engine = OpenVINOVisionEngine(model_path, self.config.device)
+        model_path = self.config.reasoner_model_path
+        engine = OpenVINOVisionEngine(model_path, self.config.models.reasoner_device)
         if not engine.available:
             return {"ok": False, "error": "OpenVINO 视觉模型尚未下载"}
         try:
@@ -212,9 +329,19 @@ class MemoryTools:
             "SUM(COALESCE(ocr_text, '') <> '') AS with_text FROM assets"
         ).fetchone()
         latest = self.conn.execute("SELECT * FROM ingestion_runs ORDER BY id DESC LIMIT 1").fetchone()
+        memory = self.conn.execute(
+            "SELECT (SELECT COUNT(*) FROM episodes) AS episodes, "
+            "(SELECT COUNT(*) FROM concepts) AS concepts, "
+            "(SELECT COUNT(*) FROM concept_states WHERE state='blocked') AS blocked"
+        ).fetchone()
+        semantic = self.conn.execute(
+            "SELECT model_id, COUNT(*) AS indexed FROM embeddings GROUP BY model_id ORDER BY indexed DESC"
+        ).fetchall()
         return {
             "documents": dict(counts),
             "chunks": chunks,
             "images": dict(ocr),
             "latest_run": dict(latest) if latest else None,
+            "memory": dict(memory),
+            "semantic_indexes": [dict(row) for row in semantic],
         }

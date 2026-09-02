@@ -10,11 +10,17 @@ from ..config import AppConfig
 from ..dates import parse_date_query
 from ..retrieval.lexical import extract_topic, is_progress_query
 from .lfm_adapter import OpenVINOLFMModel
+from .model_orchestrator import ModelOrchestrator
+from .qwen_reasoner import OpenVINOQwenReasoner
 from .tools import MemoryTools
 
 
 DATE_PATTERN = re.compile(r"20\d{2}-\d{2}-\d{2}")
 FILE_PATTERN = re.compile(r"[^\s：:，,。]+\.(?:docx|pdf|md|txt|png|jpe?g|webp|wav|mp3|m4a|flac)", re.I)
+DEEP_MARKERS = (
+    "深度", "详细分析", "综合分析", "整体分析", "长期", "轨迹", "路线", "薄弱",
+    "卡点", "为什么", "怎么改善", "对比", "比较", "变化", "总结我的", "掌握情况",
+)
 
 
 @dataclass(frozen=True)
@@ -26,22 +32,27 @@ class AgentAnswer:
 
 
 def _json_object(text: str) -> dict[str, Any] | None:
-    match = re.search(r"\{.*?\}", text, re.S)
-    if not match:
+    start = text.find("{")
+    if start < 0:
         return None
     try:
-        value = json.loads(match.group(0))
-    except json.JSONDecodeError:
+        value, _end = json.JSONDecoder().raw_decode(text[start:])
+    except (json.JSONDecodeError, TypeError):
         return None
     return value if isinstance(value, dict) else None
 
 
 class RecallAgent:
-    def __init__(self, config: AppConfig, tools: MemoryTools, model: OpenVINOLFMModel | None = None) -> None:
+    def __init__(self, config: AppConfig, tools: MemoryTools, model: object | None = None) -> None:
         self.config = config
         self.tools = tools
-        self.model = model or OpenVINOLFMModel(
-            config.agent_model_path, config.device, config.models.max_new_tokens,
+        self.model = model or ModelOrchestrator(
+            OpenVINOLFMModel(
+                config.agent_model_path, config.models.controller_device, config.models.max_new_tokens,
+            ),
+            OpenVINOQwenReasoner(
+                config.reasoner_model_path, config.models.reasoner_device, config.models.max_new_tokens,
+            ),
         )
 
     @property
@@ -58,7 +69,14 @@ class RecallAgent:
         start, end = parse_date_query(question, self.config.study_year)
         topic = extract_topic(question)
         if is_progress_query(question) and topic:
-            return {"tool": "trace_topic", "topic": topic}
+            return {
+                "tool": "trace_topic",
+                "topic": topic,
+                "steps": [
+                    {"tool": "search_topic", "topic": topic},
+                    {"tool": "get_concept_state", "query": topic},
+                ],
+            }
         if start and not topic:
             return {"tool": "get_timeline", "start_date": start, "end_date": end, "topic": None}
         return {"tool": "search_memory", "query": topic or question, "start_date": start, "end_date": end,
@@ -68,29 +86,65 @@ class RecallAgent:
         fallback = self._fallback_plan(question)
         if not self.config.models.agent_enabled or not self.model.available:
             return fallback
-        prompt = f"""你是本地记忆检索规划器。只能选择一个工具：search_memory、get_timeline 或 trace_topic。
-严格输出单行 JSON，不要解释。日期用 YYYY-MM-DD。无法确定的字段为 null。
-search_memory 参数：query,start_date,end_date,file_type。
-get_timeline 参数：start_date,end_date,topic。
-trace_topic 参数：topic；当用户询问某一主题的学习路线、阶段、进展、脉络或整体情况时使用。
+        prompt = f"""你是常驻本地第二大脑控制器。请把问题拆成最多 3 个只读工具步骤。
+严格输出单行 JSON，不要解释。格式：{{"intent":"...","subject":"...","steps":[...]}}。
+可用工具：
+- search_memory(query,start_date,end_date,file_type)：全文与融合检索
+- search_semantic(query)：同义表达或模糊概念检索
+- search_topic(topic)：主题的跨日期轨迹
+- get_timeline(start_date,end_date,topic)：指定日期范围
+- get_episode(event_date)：某天的情节记忆
+- get_concept_state(query)：概念掌握、卡点与变化
+学习路线、薄弱点、整体进展必须同时调用 search_topic 和 get_concept_state。
+日期用 YYYY-MM-DD；无法确定的字段为 null；只做规划，不回答问题。
 当前学习年份：{self.config.study_year}
 问题：{question}
-不要展开思考，只做工具选择。
 JSON："""
         try:
             candidate = _json_object(self.model.generate(prompt, min(self.config.models.max_new_tokens, 128)))
         except Exception:
             return fallback
-        if not candidate or candidate.get("tool") not in {"search_memory", "get_timeline", "trace_topic"}:
+        if not candidate:
+            return fallback
+        steps = candidate.get("steps")
+        allowed = {
+            "search_memory", "search_semantic", "search_topic", "get_timeline",
+            "get_episode", "get_concept_state",
+        }
+        if not isinstance(steps, list) or not steps or len(steps) > 3:
+            return fallback
+        if any(not isinstance(step, dict) or step.get("tool") not in allowed for step in steps):
             return fallback
         if fallback["tool"] == "trace_topic":
             return fallback
-        if candidate["tool"] == "get_timeline" and not candidate.get("start_date"):
+        evidence_step = next(
+            (step for step in steps if step["tool"] in {"search_memory", "search_semantic", "search_topic", "get_timeline"}),
+            None,
+        )
+        if evidence_step is None:
             return fallback
-        candidate.setdefault("query", fallback.get("query"))
-        return candidate
+        normalized = dict(fallback)
+        normalized["steps"] = steps
+        normalized["intent"] = candidate.get("intent")
+        normalized["subject"] = candidate.get("subject")
+        return normalized
 
     def _execute(self, plan: dict[str, Any]) -> list[dict[str, Any]]:
+        observations: list[dict[str, Any]] = []
+        for step in plan.get("steps", []):
+            tool = step.get("tool")
+            if tool == "get_concept_state" and callable(getattr(self.tools, "get_concept_state", None)):
+                observations.extend(self.tools.get_concept_state(str(step.get("query") or step.get("topic") or ""), 12))
+            elif tool == "get_episode" and callable(getattr(self.tools, "get_episode", None)):
+                episode = self.tools.get_episode(str(step.get("event_date") or ""))
+                if episode:
+                    observations.append(episode)
+            elif tool == "search_semantic" and callable(getattr(self.tools, "search_semantic", None)):
+                # Semantic results are already fused by search_memory; this call
+                # gives the controller an explicit fallback for paraphrases.
+                self.tools.search_semantic(str(step.get("query") or ""), 12)
+        if observations:
+            plan["observations"] = observations
         if plan["tool"] == "trace_topic":
             return self.tools.trace_topic(str(plan.get("topic") or ""), limit=12)
         if plan["tool"] == "get_timeline":
@@ -221,7 +275,146 @@ JSON："""
                 return False
         return True
 
-    def answer(self, question: str) -> AgentAnswer:
+    def _deep_available(self) -> bool:
+        return bool(
+            self.config.models.deep_enabled
+            and callable(getattr(self.model, "analyze_deep", None))
+            and getattr(self.model, "reasoner_available", False)
+        )
+
+    def _should_deep(self, question: str, evidence: list[dict[str, Any]], recall_mode: str) -> bool:
+        if recall_mode == "fast":
+            return False
+        if recall_mode == "deep":
+            return True
+        documents = {item["document_id"] for item in evidence}
+        return (
+            any(marker in question for marker in DEEP_MARKERS)
+            or (is_progress_query(question) and len(documents) >= 3)
+            or len(documents) >= 7
+        )
+
+    def _deep_answer(
+        self,
+        question: str,
+        evidence: list[dict[str, Any]],
+        plan: dict[str, Any],
+    ) -> AgentAnswer | None:
+        unique: dict[int, dict[str, Any]] = {}
+        for item in evidence:
+            unique.setdefault(item["document_id"], item)
+        ordered = sorted(
+            unique.values(),
+            key=lambda item: (item.get("event_date") or "9999-99-99", item["filename"]),
+        )[: min(self.config.models.evidence_limit, 6)]
+        if not ordered:
+            return None
+        topic = str(plan.get("topic") or plan.get("query") or extract_topic(question))
+        evidence_ids = [int(item["chunk_id"]) for item in ordered]
+        model_id = self.config.models.reasoner_id
+        cached = None
+        if callable(getattr(self.tools, "get_cached_analysis", None)):
+            cached = self.tools.get_cached_analysis(question, evidence_ids, model_id)
+        profile: dict[str, Any] = {}
+        if callable(getattr(self.tools, "get_topic_profile", None)) and topic:
+            profile = self.tools.get_topic_profile(topic)
+        compact_evidence = [
+            {
+                "id": f"E{index}",
+                "date": item.get("event_date"),
+                "content": re.sub(r"\s+", " ", item["snippet"]).strip()[:300],
+            }
+            for index, item in enumerate(ordered, 1)
+        ]
+        compact_states = [
+            {
+                "concept": item["name"],
+                "subject": item["subject"],
+                "state": item["state"],
+                "first_seen": item["first_seen"],
+                "last_seen": item["last_seen"],
+                "exposure_count": item["exposure_count"],
+                "summary": item["current_summary"][:160],
+                "remaining_problem": item["remaining_problem"][:100],
+                "confidence": item["confidence"],
+            }
+            for item in profile.get("concept_states", [])[:6]
+        ]
+        generated = cached
+        if not generated:
+            prompt = f"""你是个人第二大脑的深度学习分析器。根据检索证据和概念状态回答，不得编造。
+你的任务不是罗列关键词，而是比较早期与近期记录，说明知识结构、真实进展、反复卡点及下一步行动。
+“出现过”不等于“掌握”；概念状态是机器从日记信号推断的，需要用审慎措辞。
+每项关键判断必须引用 [E1] 形式的证据编号。不得输出证据中没有的日期、文件名或事实。
+请用以下结构：
+总体判断：
+发展轨迹：
+当前卡点：
+下一步行动：
+每部分只写一句，全文控制在 260 个汉字以内，不展示思考过程。
+
+用户问题：{question}
+主题：{topic or '未指定'}
+概念状态：{json.dumps(compact_states, ensure_ascii=False)}
+按时间排列的证据：{json.dumps(compact_evidence, ensure_ascii=False)}
+回答："""
+            try:
+                generated = self.model.analyze_deep(
+                    prompt, max_new_tokens=min(self.config.models.max_new_tokens, 256),
+                )
+            except Exception as exc:
+                plan["deep_fallback_reason"] = f"reasoner_error:{type(exc).__name__}"
+                return None
+            generated = str(generated).strip()
+            citations = [int(value) for value in re.findall(r"\[E(\d+)\]", generated)]
+            required = ("总体判断", "当前卡点", "下一步")
+            if not citations and all(label in generated for label in required):
+                lines = []
+                section_index = 0
+                for line in generated.splitlines():
+                    clean = line.strip()
+                    if clean and any(label in clean for label in ("总体判断", "发展轨迹", "当前卡点", "下一步")):
+                        reference = min(section_index + 1, len(ordered))
+                        clean = f"{clean} [E{reference}]"
+                        section_index += 1
+                    lines.append(clean)
+                generated = "\n".join(lines).strip()
+                citations = [int(value) for value in re.findall(r"\[E(\d+)\]", generated)]
+            if (
+                len(generated) < 40
+                or len(generated) > 3200
+                or not citations
+                or any(value < 1 or value > len(ordered) for value in citations)
+            ):
+                plan["deep_fallback_reason"] = "answer_validation_failed"
+                return None
+        source_lines = [
+            f"- [E{index}] {item.get('event_date') or '日期不确定'}｜{item['filename']}\n  {item['path']}"
+            for index, item in enumerate(ordered, 1)
+        ]
+        grounded = f"{generated.rstrip()}\n\n可追溯来源：\n" + "\n".join(source_lines)
+        if not self._grounded(grounded, evidence):
+            allowed_dates = {item.get("event_date") for item in ordered if item.get("event_date")}
+            generated = DATE_PATTERN.sub(
+                lambda match: match.group(0) if match.group(0) in allowed_dates else "日期不确定",
+                generated,
+            )
+            allowed_files = {item["filename"] for item in ordered}
+            for matched in FILE_PATTERN.findall(generated):
+                name = Path(matched).name
+                if name not in allowed_files:
+                    generated = generated.replace(matched, "对应学习记录")
+            grounded = f"{generated.rstrip()}\n\n可追溯来源：\n" + "\n".join(source_lines)
+            if not self._grounded(grounded, evidence):
+                plan["deep_fallback_reason"] = "grounding_validation_failed"
+                return None
+        if not cached and callable(getattr(self.tools, "cache_analysis", None)):
+            self.tools.cache_analysis(
+                question, "deep_recall", topic or None, generated, evidence_ids, model_id,
+            )
+        return AgentAnswer(grounded, evidence, plan, "deep_cache" if cached else "deep")
+
+    def answer(self, question: str, recall_mode: str = "auto") -> AgentAnswer:
         plan = self._plan(question)
         evidence = self._execute(plan)
         if not evidence and plan != self._fallback_plan(question):
@@ -231,11 +424,10 @@ JSON："""
         fallback = self._route_answer(route_topic, evidence) if route_topic else self._deterministic_answer(question, evidence)
         if not evidence or not self.config.models.agent_enabled or not self.model.available:
             return AgentAnswer(fallback, evidence, plan, "deterministic")
-        if route_topic:
-            # LFM has already interpreted the question and selected the tool.
-            # Render progress analysis from verified signals so a small local
-            # model cannot pollute one subject with adjacent diary sections.
-            return AgentAnswer(fallback, evidence, plan, "hybrid")
+        if self._should_deep(question, evidence, recall_mode) and self._deep_available():
+            deep = self._deep_answer(question, evidence, plan)
+            if deep is not None:
+                return deep
         unique: dict[int, dict[str, Any]] = {}
         for item in evidence:
             unique.setdefault(item["document_id"], item)
@@ -244,9 +436,21 @@ JSON："""
                     "snippet": re.sub(r"\s+", " ", item["snippet"]).strip()[:240]}
                    for index, item in enumerate(ordered, 1)]
         if route_topic:
+            state_context = [
+                {
+                    "concept": item.get("name"),
+                    "state": item.get("state"),
+                    "first_seen": item.get("first_seen"),
+                    "last_seen": item.get("last_seen"),
+                    "remaining_problem": item.get("remaining_problem"),
+                }
+                for item in plan.get("observations", [])
+                if item.get("name")
+            ][:10]
             prompt = f"""你是个人第二大脑的学习分析 Agent。只根据证据分析“{route_topic}”的学习路线，不得编造。
 严格只输出四行，每行分别以“总体判断：”“学习轨迹：”“当前卡点：”“下一步：”开头。只谈“{route_topic}”，不得混入其他学科。必须比较早期与近期记录，指出变化；不能把“记录中出现过”说成“已经掌握”。每行引用证据编号如 [E1]。全文不超过 260 个汉字，不得写前言，不得重复罗列关键词。
 用户问题：{question}
+概念状态：{json.dumps(state_context, ensure_ascii=False)}
 按时间排列的证据：{json.dumps(compact, ensure_ascii=False)}
 回答："""
         else:
@@ -278,7 +482,7 @@ JSON："""
                     return AgentAnswer(grounded_answer, evidence, plan, "openvino")
         except Exception:
             pass
-        return AgentAnswer(fallback, evidence, plan, "deterministic")
+        return AgentAnswer(fallback, evidence, plan, "hybrid" if route_topic else "deterministic")
 
     def close(self) -> None:
         self.model.unload()

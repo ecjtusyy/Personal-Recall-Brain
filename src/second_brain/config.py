@@ -13,6 +13,7 @@ DEFAULT_EXTENSIONS = (
 DEFAULT_AGENT_ID = "LiquidAI/LFM2.5-2.6B"
 DEFAULT_AGENT_OPENVINO_ID = "mosesman/LFM2.5-2.6B-openvino-int4-npu"
 DEFAULT_AGENT_LOCAL_DIR = "LFM2.5-2.6B-int4-ov"
+DEFAULT_REASONER_ID = "OpenVINO/Qwen3.5-4B-int4-ov"
 
 
 @dataclass(frozen=True)
@@ -31,11 +32,19 @@ class ModelConfig:
     agent_local_dir: str = DEFAULT_AGENT_LOCAL_DIR
     embedding_id: str = "OpenVINO/Qwen3-Embedding-0.6B-int4-cw-ov"
     asr_id: str = "OpenVINO/whisper-small-int8-ov"
-    vision_id: str = "OpenVINO/Qwen3.5-4B-int8-ov"
+    reasoner_id: str = DEFAULT_REASONER_ID
+    vision_id: str = DEFAULT_REASONER_ID
     agent_enabled: bool = True
     semantic_enabled: bool = False
+    deep_enabled: bool = False
     vision_enabled: bool = False
     max_new_tokens: int = 512
+    fast_context_tokens: int = 4096
+    deep_context_tokens: int = 8192
+    evidence_limit: int = 8
+    controller_device: str = "CPU"
+    reasoner_device: str = "CPU"
+    embedding_device: str = "CPU"
 
 
 @dataclass(frozen=True)
@@ -60,6 +69,10 @@ class AppConfig:
     @property
     def agent_model_path(self) -> Path:
         return self.model_dir / self.models.agent_local_dir
+
+    @property
+    def reasoner_model_path(self) -> Path:
+        return self.model_dir / self.models.reasoner_id.split("/")[-1]
 
     def ensure_runtime_dirs(self) -> None:
         source_resolved = {root.resolve(strict=False) for root in self.source_roots}
@@ -108,11 +121,19 @@ def load_config(path: str | Path = "config.toml") -> AppConfig:
             agent_local_dir=str(models_raw.get("agent_local_dir", default_agent_dir)),
             embedding_id=str(models_raw.get("embedding_id", ModelConfig.embedding_id)),
             asr_id=str(models_raw.get("asr_id", ModelConfig.asr_id)),
-            vision_id=str(models_raw.get("vision_id", ModelConfig.vision_id)),
+            reasoner_id=str(models_raw.get("reasoner_id", models_raw.get("vision_id", DEFAULT_REASONER_ID))),
+            vision_id=str(models_raw.get("vision_id", models_raw.get("reasoner_id", DEFAULT_REASONER_ID))),
             agent_enabled=bool(models_raw.get("agent_enabled", True)),
             semantic_enabled=bool(models_raw.get("semantic_enabled", False)),
+            deep_enabled=bool(models_raw.get("deep_enabled", models_raw.get("vision_enabled", False))),
             vision_enabled=bool(models_raw.get("vision_enabled", False)),
             max_new_tokens=int(models_raw.get("max_new_tokens", 512)),
+            fast_context_tokens=int(models_raw.get("fast_context_tokens", 4096)),
+            deep_context_tokens=int(models_raw.get("deep_context_tokens", 8192)),
+            evidence_limit=int(models_raw.get("evidence_limit", 8)),
+            controller_device=str(models_raw.get("controller_device", raw.get("device", "CPU"))).upper(),
+            reasoner_device=str(models_raw.get("reasoner_device", raw.get("device", "CPU"))).upper(),
+            embedding_device=str(models_raw.get("embedding_device", raw.get("device", "CPU"))).upper(),
         ),
     )
     if not config.source_roots:

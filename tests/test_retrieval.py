@@ -36,6 +36,7 @@ def test_natural_question_extracts_topic():
     assert extract_topic("我以前什么时候复习过申论吗？") == "申论"
     assert extract_topic("我的高等代数的学习路线是什么情况？") == "高等代数"
     assert is_progress_query("我的高等代数学习到什么阶段？")
+    assert extract_topic("深度分析我的高等代数学习路线、当前卡点和下一步") == "高等代数"
 
 
 def test_chinese_lexical_search_returns_evidence(tmp_path):
@@ -75,3 +76,25 @@ def test_trace_topic_returns_chronological_documents(tmp_path):
     tools = MemoryTools(config, conn)
     results = tools.trace_topic("高等数学")
     assert [item["event_date"] for item in results] == ["2026-08-22"]
+
+
+def test_agent_can_read_episode_and_concept_state(tmp_path):
+    config, conn = make_brain(tmp_path)
+    tools = MemoryTools(config, conn)
+    episode = tools.get_episode("2026-08-21")
+    assert episode["event_date"] == "2026-08-21"
+    assert episode["source_document_ids"]
+    states = tools.get_concept_state("申论")
+    assert states
+    assert states[0]["subject"] == "申论"
+    assert states[0]["evidence"][0]["path"].endswith("8.21！！！申论开始.docx")
+
+
+def test_hybrid_retrieval_diversifies_documents(tmp_path):
+    config, conn = make_brain(tmp_path)
+    tools = MemoryTools(config, conn)
+    results = tools.search_memory("学习复习", limit=10)
+    counts = {}
+    for result in results:
+        counts[result["document_id"]] = counts.get(result["document_id"], 0) + 1
+    assert all(count <= 2 for count in counts.values())

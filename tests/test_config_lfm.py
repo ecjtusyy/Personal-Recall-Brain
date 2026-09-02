@@ -21,3 +21,7 @@ def test_default_config_uses_lfm_as_local_agent(tmp_path):
     assert config.models.agent_openvino_id == DEFAULT_AGENT_OPENVINO_ID
     assert config.models.agent_local_dir == DEFAULT_AGENT_LOCAL_DIR
     assert config.agent_model_path == tmp_path / "models" / DEFAULT_AGENT_LOCAL_DIR
+    assert config.models.reasoner_id == "OpenVINO/Qwen3.5-4B-int4-ov"
+    assert config.models.fast_context_tokens == 4096
+    assert config.models.deep_context_tokens == 8192
+    assert config.models.controller_device == "CPU"

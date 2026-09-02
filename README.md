@@ -8,10 +8,11 @@
 - 独立图片与 Word 图片用 RapidOCR 的 **OpenVINO 推理后端**识别中文；OCR 分批提交、可中断续跑。
 - WAV、MP3、M4A、FLAC 用 **OpenVINO GenAI Whisper**按需转写。
 - SHA-256 增量扫描：未变化的文件不重复解析，单个坏文件不影响整批。
-- SQLite + FTS5 中文全文检索、时间轴、日期来源与置信度。
-- 可选 OpenVINO 中文语义检索。
-- 常驻的 LFM2.5-2.6B 通过 OpenVINO 规划工具调用并整理答案；模型不可用时确定性检索仍可用。
-- Qwen 视觉模型按需加载、分析结果缓存；不会和主 Agent 长期同时占用内存。
+- Source、Episode、Concept、ConceptState 四层记忆；可从原始索引安全重建派生层。
+- FTS5 全文、OpenVINO 向量、日期/学科元数据通过 RRF 融合并做来源多样化。
+- 常驻 LFM2.5-2.6B Controller 负责意图、最多三步只读工具规划和证据筛选。
+- Qwen3.5-4B INT4 负责跨日期轨迹、多文件比较、薄弱点与图片分析；按需加载、结果缓存。
+- 双模型单活：深度回忆前卸载 LFM，完成后卸载 Qwen 并恢复 LFM。
 - Streamlit 中文界面：聊天、精确搜索、时间轴、索引状态、一键打开原文件。
 
 ## 针对本机的模型方案
@@ -23,8 +24,8 @@
 | 智能问答 | `LiquidAI/LFM2.5-2.6B` → OpenVINO INT4 | 核心 Agent，界面启动后常驻并跨提问复用 |
 | 中文 OCR | RapidOCR PP-OCR + OpenVINO backend | 正文扫描后分批加载、逐图保存 |
 | 音频转写 | `OpenVINO/whisper-small-int8-ov` | 仅有音频且模型已下载时加载 |
-| 语义检索 | `OpenVINO/Qwen3-Embedding-0.6B-int4-cw-ov` | 默认关闭，可选开启 |
-| 复杂图片 | `OpenVINO/Qwen3.5-4B-int8-ov` | 默认关闭，只按需加载并缓存结果 |
+| 语义检索 | `OpenVINO/Qwen3-Embedding-0.6B-int4-cw-ov` | 小批量生成，可中断续跑 |
+| 深度回忆与图片 | `OpenVINO/Qwen3.5-4B-int4-ov` | 仅复杂任务按需加载，完成后释放 |
 
 核心 Agent 的上游是 LiquidAI 官方权重，默认下载按 Optimum Intel 官方配方生成的 INT4 OpenVINO IR，再由 OpenVINO GenAI 在 CPU 上运行。下载流程只接收模型、tokenizer、配置和许可证文件，不执行模型仓库脚本；也保留从官方权重本地转换的回退能力。
 
@@ -37,7 +38,7 @@
    - `D:\本科期间学习\考研`
 
 3. 双击 `启动第二大脑.bat`。
-4. 浏览器打开后会自动加载并常驻 LFM2.5-2.6B；状态显示“已常驻内存”后即可提问。
+4. 浏览器打开后会自动加载并常驻 LFM2.5-2.6B；可在聊天区选择“自动选择、快速回忆、深度回忆”。
 5. 需要检索图片里的文字时，点“补充下一批图片文字”，或双击 `补充图片文字.bat`。每张图片完成后都会保存，中断后下次从未完成处继续。
 
 也可以先双击 `扫描学习资料.bat` 做离线扫描。
@@ -58,7 +59,7 @@
 ```powershell
 .venv\Scripts\python.exe -m second_brain.cli download-models --profile audio
 .venv\Scripts\python.exe -m second_brain.cli download-models --profile semantic
-.venv\Scripts\python.exe -m second_brain.cli download-models --profile vision
+.venv\Scripts\python.exe -m second_brain.cli download-models --profile deep
 ```
 
 下载语义或视觉模型后，还需要在 `config.toml` 的 `[models]` 中把对应 `*_enabled` 改为 `true`。8GB 机器不建议一次启用全部模型。
@@ -67,6 +68,8 @@
 
 ```powershell
 second-brain scan
+second-brain consolidate
+second-brain build-semantic-index
 second-brain enrich-images --limit 200
 second-brain search "申论"
 second-brain ask "我以前什么时候复习过申论？"

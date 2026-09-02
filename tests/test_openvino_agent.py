@@ -74,7 +74,9 @@ def test_agent_traces_topic_progress_instead_of_searching_whole_question(tmp_pat
     tools = FakeTools()
     answer = RecallAgent(config(tmp_path), tools, model).answer("我的高等代数的学习路线是什么情况？")
     assert answer.mode == "hybrid"
-    assert answer.plan == {"tool": "trace_topic", "topic": "高等代数"}
+    assert answer.plan["tool"] == "trace_topic"
+    assert answer.plan["topic"] == "高等代数"
+    assert [step["tool"] for step in answer.plan["steps"]] == ["search_topic", "get_concept_state"]
     assert tools.calls[0] == ("trace_topic", "高等代数")
     assert "总体判断" in answer.answer
 
@@ -86,7 +88,7 @@ def test_repetitive_model_output_falls_back_to_structured_route(tmp_path):
     answer = RecallAgent(config(tmp_path), FakeTools(), model).answer("高等代数学习路线怎么样？")
     assert answer.mode == "hybrid"
     assert "总体判断" in answer.answer
-    assert "关键节点" in answer.answer
+    assert "学习轨迹" in answer.answer
     assert len(answer.answer) < 1200
 
 
@@ -150,3 +152,81 @@ def test_warmup_keeps_lfm_resident(tmp_path):
     agent = RecallAgent(config(tmp_path), FakeTools(), model)
     assert agent.warmup()
     assert agent.resident
+
+
+class FakeDeepModel(FakeModel):
+    reasoner_available = True
+
+    def analyze_deep(self, prompt, max_new_tokens=None):
+        self.prompts.append(prompt)
+        return (
+            "总体判断：已经有连续记录，但不能视为完全掌握。[E1]\n"
+            "发展轨迹：先暴露问题，后进入复习强化。[E1]\n"
+            "当前卡点：证据显示独立调用知识仍不稳定。[E1]\n"
+            "下一步行动：按错题与概念状态做针对性复盘。[E1]"
+        )
+
+
+class FakeDeepModelWithoutCitations(FakeDeepModel):
+    def analyze_deep(self, prompt, max_new_tokens=None):
+        return (
+            "总体判断：已有连续学习记录，但还不能视为完全掌握。\n"
+            "发展轨迹：从接触概念转入专题复习。\n"
+            "当前卡点：独立组织证明仍不稳定。\n"
+            "下一步行动：按概念状态复盘并做限时验证。"
+        )
+
+
+class FakeDeepModelWithUnknownDate(FakeDeepModel):
+    def analyze_deep(self, prompt, max_new_tokens=None):
+        return (
+            "总体判断：在 2026-09-99 已经完全掌握。[E1]\n"
+            "发展轨迹：记录显示持续练习。[E1]\n"
+            "当前卡点：独立证明仍不稳定。[E1]\n"
+            "下一步行动：回到原始证据复盘。[E1]"
+        )
+
+
+def test_deep_recall_routes_complex_question_to_qwen(tmp_path):
+    tools = FakeTools()
+    model = FakeDeepModel(['{"tool":"trace_topic","topic":"高等代数"}'])
+    cfg = config(tmp_path)
+    cfg = AppConfig(
+        config_path=cfg.config_path, study_year=cfg.study_year, data_dir=cfg.data_dir,
+        model_dir=cfg.model_dir, device=cfg.device, source_roots=cfg.source_roots,
+        ingestion=cfg.ingestion, models=ModelConfig(agent_enabled=True, deep_enabled=True),
+    )
+    answer = RecallAgent(cfg, tools, model).answer("深度分析我的高等代数学习路线", recall_mode="deep")
+    assert answer.mode == "deep"
+    assert "当前卡点" in answer.answer
+    assert "可追溯来源" in answer.answer
+    assert any("概念状态" in prompt for prompt in model.prompts)
+
+
+def test_deep_recall_adds_verified_references_when_model_omits_them(tmp_path):
+    tools = FakeTools()
+    model = FakeDeepModelWithoutCitations(['{"tool":"trace_topic","topic":"高等代数"}'])
+    cfg = config(tmp_path)
+    cfg = AppConfig(
+        config_path=cfg.config_path, study_year=cfg.study_year, data_dir=cfg.data_dir,
+        model_dir=cfg.model_dir, device=cfg.device, source_roots=cfg.source_roots,
+        ingestion=cfg.ingestion, models=ModelConfig(agent_enabled=True, deep_enabled=True),
+    )
+    answer = RecallAgent(cfg, tools, model).answer("深度分析高等代数", recall_mode="deep")
+    assert answer.mode == "deep"
+    assert "[E1]" in answer.answer
+
+
+def test_deep_recall_sanitizes_unverified_dates(tmp_path):
+    tools = FakeTools()
+    model = FakeDeepModelWithUnknownDate(['{"tool":"trace_topic","topic":"高等代数"}'])
+    cfg = config(tmp_path)
+    cfg = AppConfig(
+        config_path=cfg.config_path, study_year=cfg.study_year, data_dir=cfg.data_dir,
+        model_dir=cfg.model_dir, device=cfg.device, source_roots=cfg.source_roots,
+        ingestion=cfg.ingestion, models=ModelConfig(agent_enabled=True, deep_enabled=True),
+    )
+    answer = RecallAgent(cfg, tools, model).answer("深度分析高等代数", recall_mode="deep")
+    assert answer.mode == "deep"
+    assert "2026-09-99" not in answer.answer
+    assert "日期不确定" in answer.answer

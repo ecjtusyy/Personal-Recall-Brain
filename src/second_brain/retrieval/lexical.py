@@ -13,15 +13,28 @@ QUESTION_NOISE = (
     "我以前", "我之前", "之前", "以前", "什么时候", "哪一天", "那天", "学了什么",
     "复习过", "学习过", "写过", "记录过", "在哪里", "在哪个", "哪份", "是否",
     "有没有", "了吗", "吗", "请帮我", "帮我", "word", "Word", "文档", "文件", "的",
+    "深度分析", "详细分析", "综合分析", "整体分析", "当前卡点", "卡点", "下一步行动", "下一步",
 )
 PROGRESS_MARKERS = (
     "路线", "路径", "进展", "进度", "情况", "阶段", "脉络", "轨迹", "总结", "梳理",
     "学到哪里", "学得怎么样",
 )
 DATE_TEXT = re.compile(r"(?<!\d)(?:20\d{2}[年./_-])?\d{1,2}[月./_-]\d{1,2}日?(?!\d)")
+KNOWN_TOPICS = (
+    ("高等代数", ("高等代数", "高代")),
+    ("数学分析", ("数学分析", "数分")),
+    ("英语", ("英语",)),
+    ("申论", ("申论",)),
+    ("行测", ("行测",)),
+    ("政治", ("政治",)),
+    ("计算机", ("计算机",)),
+)
 
 
 def extract_topic(query: str) -> str:
+    for canonical, aliases in KNOWN_TOPICS:
+        if any(alias in query for alias in aliases):
+            return canonical
     text = DATE_TEXT.sub(" ", query)
     for noise in sorted(QUESTION_NOISE, key=len, reverse=True):
         text = text.replace(noise, " ")

@@ -7,6 +7,8 @@ import streamlit as st
 
 from second_brain.agent.openvino_agent import RecallAgent
 from second_brain.agent.lfm_adapter import OpenVINOLFMModel
+from second_brain.agent.model_orchestrator import ModelOrchestrator
+from second_brain.agent.qwen_reasoner import OpenVINOQwenReasoner
 from second_brain.agent.tools import MemoryTools
 from second_brain.config import load_config
 from second_brain.db import open_db
@@ -27,10 +29,17 @@ def cached_config(config_path: str):
 @st.cache_resource
 def resident_model(config_path: str):
     model_config = load_config(config_path)
-    return OpenVINOLFMModel(
-        model_config.agent_model_path,
-        model_config.device,
-        model_config.models.max_new_tokens,
+    return ModelOrchestrator(
+        OpenVINOLFMModel(
+            model_config.agent_model_path,
+            model_config.models.controller_device,
+            model_config.models.max_new_tokens,
+        ),
+        OpenVINOQwenReasoner(
+            model_config.reasoner_model_path,
+            model_config.models.reasoner_device,
+            model_config.models.max_new_tokens,
+        ),
     )
 
 
@@ -86,6 +95,10 @@ with st.sidebar:
     c1, c2 = st.columns(2)
     c1.metric("已索引", documents.get("ready") or 0)
     c2.metric("知识块", status.get("chunks") or 0)
+    memory = status.get("memory") or {}
+    c3, c4 = st.columns(2)
+    c3.metric("学习日", memory.get("episodes") or 0)
+    c4.metric("概念状态", memory.get("concepts") or 0)
     if st.button("立即扫描资料", type="primary", use_container_width=True):
         progress = st.status("正在只读扫描…", expanded=True)
         stats = Scanner(config, conn, progress=progress.write).scan()
@@ -106,6 +119,7 @@ with st.sidebar:
             rerun_page()
     st.divider()
     agent_path = config.agent_model_path / "openvino_model.xml"
+    reasoner_path = config.reasoner_model_path / "openvino_language_model.xml"
     st.write("核心 Agent", "LFM2.5-2.6B · OpenVINO INT4")
     st.write("模型文件", "✅ 已就绪" if agent_path.exists() else "⬇️ 尚未下载")
     if not agent_path.exists() and st.button("下载核心 OpenVINO 模型", use_container_width=True):
@@ -126,6 +140,35 @@ with st.sidebar:
             except Exception as exc:
                 resident_status.update(label=f"LFM 常驻加载失败：{exc}", state="error")
                 resident_lfm = None
+    st.write("深度推理", "Qwen3.5-4B · OpenVINO INT4")
+    st.write("按需模型", "✅ 已就绪" if reasoner_path.exists() else "⬇️ 尚未下载")
+    if not reasoner_path.exists() and st.button("下载深度回忆模型", use_container_width=True):
+        with st.status("正在下载 Qwen3.5-4B OpenVINO INT4，约需 3.5 GB…", expanded=True) as model_status:
+            try:
+                for model_path in download_models(config.config_path, "deep"):
+                    st.write(model_path)
+                model_status.update(label="深度回忆模型下载完成", state="complete")
+                rerun_page()
+            except Exception as exc:
+                model_status.update(label=f"下载失败：{exc}", state="error")
+    if config.models.semantic_enabled:
+        current_semantic = next(
+            (
+                item for item in status.get("semantic_indexes", [])
+                if item["model_id"].startswith(config.models.embedding_id.split("/")[-1] + ":sample256")
+            ),
+            {"indexed": 0},
+        )
+        st.write("语义索引", f"{current_semantic['indexed']} / {status.get('chunks') or 0}")
+        if current_semantic["indexed"] < (status.get("chunks") or 0):
+            if st.button("补齐语义索引（可中断续跑）", use_container_width=True):
+                with st.status("OpenVINO 正在生成本地语义向量…", expanded=True) as semantic_status:
+                    result = tools.build_semantic_index()
+                    semantic_status.update(
+                        label=f"语义索引新增 {result.get('indexed', 0)} 条",
+                        state="complete" if result.get("ok") else "error",
+                    )
+                rerun_page()
     st.caption("模型只写入项目 models 目录；不会写入学习资料目录。")
 
 st.title("Personal Recall Brain")
@@ -134,6 +177,13 @@ st.caption("先检索证据，再由本地 OpenVINO Agent 组织回答。每条�
 chat_tab, search_tab, timeline_tab, status_tab = st.tabs(["💬 问第二大脑", "🔎 精确搜索", "🗓️ 学习时间轴", "🛡️ 状态与安全"])
 
 with chat_tab:
+    recall_label = st.radio(
+        "回忆模式",
+        ("自动选择", "快速回忆", "深度回忆"),
+        horizontal=True,
+        help="自动选择会把跨日期、薄弱点和多资料问题交给按需深度模型。",
+    )
+    recall_mode = {"自动选择": "auto", "快速回忆": "fast", "深度回忆": "deep"}[recall_label]
     if "messages" not in st.session_state:
         st.session_state.messages = []
     for message in st.session_state.messages:
@@ -148,12 +198,14 @@ with chat_tab:
         with st.chat_message("assistant"):
             with st.spinner("正在检索本地证据…"):
                 active_agent = RecallAgent(config, tools, model=resident_lfm)
-                result = active_agent.answer(question)
+                result = active_agent.answer(question, recall_mode=recall_mode)
             st.markdown(result.answer)
             mode_labels = {
                 "openvino": "回答模式：常驻 LFM2.5-2.6B · OpenVINO",
                 "hybrid": "回答模式：LFM Agent 规划 · 证据校验渲染",
                 "deterministic": "回答模式：确定性检索（模型未加载或回答校验未通过）",
+                "deep": "回答模式：Qwen3.5-4B INT4 · 深度回忆（单活切换）",
+                "deep_cache": "回答模式：Qwen 深度回忆缓存 · 无需重新加载模型",
             }
             st.caption(mode_labels.get(result.mode, mode_labels["deterministic"]))
             show_evidence(result.evidence, f"answer-{len(st.session_state.messages)}")
